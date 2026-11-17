@@ -6,7 +6,7 @@ modelos, forecasting probabilístico, simulação, avaliação de risco e monito
 O projeto combina duas entregas:
 
 - uma biblioteca importável, centrada em `ForecastEngine`;
-- 13 notebooks que apresentam a formulação matemática e validam cada componente passo a passo.
+- 14 notebooks que apresentam a formulação matemática e validam cada componente passo a passo.
 
 ## Fluxo completo
 
@@ -404,7 +404,7 @@ simulation = engine.simulate("demanda", horizon=12, n_paths=10_000, seed=42)
 | Distribuições e artefatos | [`contracts.py`](src/time_series_lab/contracts.py) | [Notebook 13](notebooks/13_sistema_final.ipynb) |
 | Change-point offline | [`change_points.py`](src/time_series_lab/change_points.py) | [Notebook 11](notebooks/11_change_point.ipynb) |
 | CUSUM/EWMA online | [`detectors.py`](src/time_series_lab/detectors.py) | [Notebook 12](notebooks/12_cusum_ewma.ipynb) |
-| Orquestração completa | [`ForecastEngine`](src/time_series_lab/engine.py) | [Notebook 13](notebooks/13_sistema_final.ipynb) |
+| Orquestração completa | [`ForecastEngine`](src/time_series_lab/engine.py) | Notebooks [13](notebooks/13_sistema_final.ipynb) e [14](notebooks/14_ciclo_completo_usuario.ipynb) |
 
 A referência detalhada da API está em [`docs/engine_api.md`](docs/engine_api.md). A visão do
 sistema e seus limites estão em [`docs/system_vision.md`](docs/system_vision.md).
@@ -426,6 +426,7 @@ sistema e seus limites estão em [`docs/system_vision.md`](docs/system_vision.md
 | [11](notebooks/11_change_point.ipynb) | Mudanças estruturais | CUSUM retrospectivo e segmentação penalizada |
 | [12](notebooks/12_cusum_ewma.ipynb) | Detecção sequencial | ARL, falso alarme, atraso, CUSUM e EWMA |
 | [13](notebooks/13_sistema_final.ipynb) | Sistema final | seleção, persistência, monitoramento, risco e API |
+| [14](notebooks/14_ciclo_completo_usuario.ipynb) | Ciclo guiado | uma `pandas.Series` do usuário percorre caracterização, seleção, forecast, risco e monitoramento |
 
 Cada notebook possui plano em `docs/plano_notebook_XX.md`, funções matemáticas explícitas,
 exercícios, gabarito e testes rápidos.
@@ -472,7 +473,7 @@ uv run pytest
 Para validar um notebook específico:
 
 ```bash
-uv run python scripts/validate_notebook.py notebooks/13_sistema_final.ipynb
+uv run python scripts/validate_notebook.py notebooks/14_ciclo_completo_usuario.ipynb
 ```
 
 ## 14. Estrutura

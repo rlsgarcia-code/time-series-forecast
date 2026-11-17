@@ -16,6 +16,7 @@ CASES = [
     ("11_change_point.ipynb", ["change-point", "CUSUM", "def best_single_change", "programação dinâmica", "penalidade", "Exercícios"]),
     ("12_cusum_ewma.ipynb", ["Detecção sequencial", "CUSUM", "EWMA", "def two_sided_cusum", "run length", "Exercícios"]),
     ("13_sistema_final.ipynb", ["Sistema integrado", "ForecastEnvelope", "SequentialMonitor", "backtest_registry", "risco de trajetória", "Exercícios"]),
+    ("14_ciclo_completo_usuario.ipynb", ["Ciclo completo", "EDITE SOMENTE ESTA CÉLULA", "rolling-origin", "SelectionPolicy", "diagnose", "process_observation", "Exercícios"]),
 ]
 
 
@@ -41,6 +42,6 @@ def test_planned_notebook_is_complete_and_explicit(filename: str, required: list
 
 
 def test_each_planned_notebook_has_a_plan_document() -> None:
-    for number in range(1, 14):
+    for number in range(1, 15):
         assert Path(f"docs/plano_notebook_{number:02d}.md").exists()
 
