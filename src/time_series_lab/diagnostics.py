@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
 import warnings
-from typing import Any
+from typing import Any, Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -32,6 +33,13 @@ def _safe_lag(size: int, requested: int) -> int:
     return max(1, min(requested, size // 3 - 1))
 
 
+def _statsmodels_tuple(function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """Mantém retorno em tupla sem quebrar statsmodels anterior a ``result_object``."""
+    if "result_object" in inspect.signature(function).parameters:
+        kwargs["result_object"] = False
+    return function(*args, **kwargs)
+
+
 def _acf_tuple(values: np.ndarray, lag: int) -> tuple[float, ...]:
     return tuple(float(value) for value in acf(values, nlags=lag, fft=True))
 
@@ -55,15 +63,15 @@ def characterize_series(series: TimeSeries, *, max_lag: int = 24) -> SeriesProfi
     difference_lag = _safe_lag(differences.size, max_lag)
 
     try:
-        adf_result = adfuller(values, autolag="AIC", result_object=False)
+        adf_result = _statsmodels_tuple(adfuller, values, autolag="AIC")
         adf_statistic, adf_pvalue = float(adf_result[0]), float(adf_result[1])
     except ValueError:
         adf_statistic, adf_pvalue = np.nan, np.nan
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", InterpolationWarning)
         try:
-            kpss_result = kpss(
-                values, regression="ct", nlags="auto", result_object=False
+            kpss_result = _statsmodels_tuple(
+                kpss, values, regression="ct", nlags="auto"
             )
             kpss_statistic, kpss_pvalue = float(kpss_result[0]), float(kpss_result[1])
         except ValueError:
@@ -74,7 +82,7 @@ def characterize_series(series: TimeSeries, *, max_lag: int = 24) -> SeriesProfi
     arch_lags = min(10, max(1, values.size // 5))
     try:
         arch_pvalue = float(
-            het_arch(detrended, nlags=arch_lags, result_object=False)[1]
+            _statsmodels_tuple(het_arch, detrended, nlags=arch_lags)[1]
         )
     except (ValueError, np.linalg.LinAlgError):
         arch_pvalue = np.nan
@@ -281,7 +289,7 @@ def diagnose_residuals(
     jarque = stats.jarque_bera(standardized)
     try:
         arch_pvalue = float(
-            het_arch(standardized, nlags=min(10, lag), result_object=False)[1]
+            _statsmodels_tuple(het_arch, standardized, nlags=min(10, lag))[1]
         )
     except (ValueError, np.linalg.LinAlgError):
         arch_pvalue = np.nan

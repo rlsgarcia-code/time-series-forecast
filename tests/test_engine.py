@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import matplotlib.pyplot as plt
+import time_series_lab.diagnostics as diagnostics_module
 
 from time_series_lab import (
     AR1Spec,
@@ -340,6 +341,37 @@ def test_characterization_change_points_and_status_queries() -> None:
     assert profile.suggested_models
     assert change.fitted_values.shape == (160,)
     assert engine.get_status("x").aliases == {}
+
+
+def test_characterization_uses_statsmodels_014_compatible_arguments(monkeypatch) -> None:
+    """Evita keywords adicionadas apenas em versões posteriores do statsmodels."""
+
+    def reject_result_object(function):
+        def compatible_call(*args, **kwargs):
+            assert "result_object" not in kwargs
+            return function(*args, **kwargs)
+
+        return compatible_call
+
+    monkeypatch.setattr(
+        diagnostics_module,
+        "adfuller",
+        reject_result_object(diagnostics_module.adfuller),
+    )
+    monkeypatch.setattr(
+        diagnostics_module,
+        "kpss",
+        reject_result_object(diagnostics_module.kpss),
+    )
+    monkeypatch.setattr(
+        diagnostics_module,
+        "het_arch",
+        reject_result_object(diagnostics_module.het_arch),
+    )
+
+    engine, _ = configured_engine()
+    profile = engine.characterize("x", max_lag=8)
+    assert np.isfinite(profile.adf_statistic)
 
 
 def test_characterization_and_residual_plots_are_returned_without_showing() -> None:
