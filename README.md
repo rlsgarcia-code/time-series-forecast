@@ -57,6 +57,12 @@ series = TimeSeries.from_pandas(
 )
 ```
 
+O contrato interno permanece estrito e não aceita `NaN`. Para entrada exploratória, o
+[Notebook 14](notebooks/14_ciclo_completo_usuario.ipynb) faz uma etapa anterior e auditável de
+limpeza: aceita séries curtas, remove bordas ausentes e permite escolher entre erro, preenchimento
+causal pelo último valor (`ffill`) ou interpolação temporal não causal. O notebook registra quantos
+valores foram tratados antes de criar `TimeSeries`.
+
 Observações atrasadas ou revisões históricas não são sobrescritas silenciosamente. Uma alteração da
 série incrementa sua `revision`, e um modelo ajustado em revisão anterior é considerado obsoleto.
 

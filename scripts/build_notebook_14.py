@@ -1,5 +1,6 @@
 """Constrói o Notebook 14: ciclo completo a partir de uma pandas Series."""
 
+import json
 from pathlib import Path
 
 from notebook_builder import code, md, setup_cell, write_notebook
@@ -64,8 +65,9 @@ CELLS = [
     deve ser uma `pd.Series`; seu índice representa o tempo e seus valores representam uma única
     variável.
 
-    O exemplo padrão simula um AR(1) com um pequeno deslocamento apenas na cauda. Assim o notebook
-    continua reproduzível antes de você conectar seus próprios dados.
+    O exemplo padrão simula somente 57 observações de um AR(1), inclui três valores ausentes e
+    coloca um pequeno deslocamento apenas na cauda. Assim o próprio exemplo valida o caso curto
+    que motivou esta revisão antes de você conectar seus dados.
     """),
     code(r"""
     # ==================== EDITE SOMENTE ESTA CÉLULA ====================
@@ -75,11 +77,12 @@ CELLS = [
         # return frame.set_index("timestamp")["valor"].sort_index()
 
         rng = np.random.default_rng(1401)
-        index = pd.date_range("2024-01-01", periods=240, freq="D", tz="UTC")
+        index = pd.date_range("2024-01-01", periods=57, freq="D", tz="UTC")
         values = np.empty(len(index)); values[0] = 0.0
         for t in range(1, len(index)):
-            late_shift = 0.75 if t >= 230 else 0.0
+            late_shift = 0.75 if t >= 47 else 0.0
             values[t] = 0.15 + late_shift + 0.72 * values[t-1] + rng.normal(0, 0.65)
+        values[[8, 21, 35]] = np.nan
         return pd.Series(values, index=index, name="valor")
 
     USER_SERIES = load_user_series()
@@ -91,6 +94,8 @@ CELLS = [
     ## 3. Configuração do experimento
 
     - `MONITORING_HOLDOUT` define quantas observações finais ficam invisíveis durante a escolha.
+    - `MISSING_VALUE_POLICY="ffill"` usa apenas o passado e é compatível com avaliação causal.
+      `"interpolate"` usa os dois lados do ponto ausente e deve ser uma decisão consciente.
     - `SERIES_KIND="returns"` autoriza GARCH; em níveis genéricos ele não entra automaticamente.
     - Markov switching é opcional porque seu ajuste em cada origem custa mais e exige uma hipótese
       substantiva de regimes.
@@ -102,6 +107,7 @@ CELLS = [
     FREQUENCY = None             # exemplo: "D"; None tenta inferir
     TIMEZONE = "UTC"            # usado apenas se o índice for ingênuo
     SERIES_KIND = "level"       # "level" ou "returns"
+    MISSING_VALUE_POLICY = "ffill"  # "error", "ffill" ou "interpolate"
     MONITORING_HOLDOUT = 10
     FORECAST_HORIZON = 12
     N_SIMULATION_PATHS = 5_000
@@ -112,35 +118,102 @@ CELLS = [
 
     if SERIES_KIND not in {"level", "returns"}:
         raise ValueError("SERIES_KIND deve ser 'level' ou 'returns'")
+    if MISSING_VALUE_POLICY not in {"error", "ffill", "interpolate"}:
+        raise ValueError("MISSING_VALUE_POLICY deve ser 'error', 'ffill' ou 'interpolate'")
     """),
     md(r"""
     ## 4. Contrato temporal e separação
 
-    A validação ocorre antes de qualquer teste estatístico. Duplicações, desordem, gaps, infinitos e
-    frequência incompatível interrompem o fluxo, pois ACF, horizonte e forecast dependem de uma
-    noção temporal coerente.
+    A validação ocorre antes de qualquer teste estatístico. Duplicações, gaps e frequência
+    incompatível interrompem o fluxo, pois ACF, horizonte e forecast dependem de uma noção temporal
+    coerente. `NaN` e infinitos são contabilizados e tratados segundo a política escolhida.
 
-    Exigimos ao menos 80 observações e deixamos pelo menos 60 no desenvolvimento. Esses números não
-    são leis estatísticas: são mínimos operacionais para que o exemplo tenha origens de backtest e
-    resíduos suficientes.
+    Valores ausentes no começo ou no fim são removidos: não existe observação passada para preencher
+    o início, e preencher o fim inventaria os dados mais recentes. Valores internos usam `ffill` por
+    padrão, isto é, $\tilde y_t=y_{t-1}$ quando $y_t$ está ausente. Isso não olha o futuro, embora
+    ainda seja uma hipótese de imputação que deve constar na auditoria. A interpolação temporal é
+    oferecida, mas usa informação posterior e por isso não é a escolha padrão.
+
+    O mínimo agora é adaptativo: 24 valores de desenvolvimento para modelos de nível e 34 quando
+    GARCH entra na comparação. Amostras curtas produzem menos origens, intervalos mais incertos e
+    testes com menor poder; elas não são rejeitadas apenas por terem menos de 80 pontos.
     """),
     code(r"""
-    raw = USER_SERIES.copy().sort_index()
-    if not isinstance(raw.index, pd.DatetimeIndex):
+    source = USER_SERIES.copy()
+    if not isinstance(source.index, pd.DatetimeIndex):
         raise TypeError("USER_SERIES.index deve ser um DatetimeIndex")
-    if raw.index.tz is None:
-        raw.index = raw.index.tz_localize(TIMEZONE)
-    raw = raw.astype(float)
-    if len(raw) < 80:
-        raise ValueError("Use ao menos 80 observações para o ciclo completo")
-    if not 1 <= MONITORING_HOLDOUT <= len(raw) - 60:
-        raise ValueError("MONITORING_HOLDOUT deve preservar ao menos 60 observações de desenvolvimento")
+    source = source.sort_index()
+    if not source.index.is_unique:
+        raise ValueError("O índice possui timestamps duplicados; agregue-os antes da modelagem")
+    if source.index.tz is None:
+        source.index = source.index.tz_localize(TIMEZONE)
+
+    source_frequency = FREQUENCY or pd.infer_freq(source.index)
+    if source_frequency is None:
+        raise ValueError("Não foi possível inferir a frequência; preencha FREQUENCY, por exemplo 'D'")
+    expected_index = pd.date_range(source.index[0], periods=len(source), freq=source_frequency)
+    if not source.index.equals(expected_index):
+        raise ValueError("O índice possui gaps; regularize/resample a série antes da modelagem")
+
+    numeric_source = pd.to_numeric(source, errors="coerce").astype(float)
+    numeric_source = numeric_source.replace([np.inf, -np.inf], np.nan)
+    valid_positions = np.flatnonzero(numeric_source.notna().to_numpy())
+    if valid_positions.size == 0:
+        raise ValueError("A série não possui nenhum valor numérico finito")
+
+    first_valid, last_valid = int(valid_positions[0]), int(valid_positions[-1])
+    trimmed = numeric_source.iloc[first_valid:last_valid + 1].copy()
+    missing_before = trimmed.isna()
+    if missing_before.any() and MISSING_VALUE_POLICY == "error":
+        examples = [str(value) for value in trimmed.index[missing_before][:5]]
+        raise ValueError(f"Há valores ausentes; exemplos: {examples}")
+    if MISSING_VALUE_POLICY == "ffill":
+        raw = trimmed.ffill()
+    elif MISSING_VALUE_POLICY == "interpolate":
+        print("ATENÇÃO: interpolate usa observações futuras ao ponto ausente.")
+        raw = trimmed.interpolate(method="time", limit_area="inside")
+    else:
+        raw = trimmed
+    if raw.isna().any():
+        raise ValueError("A política escolhida deixou valores ausentes sem tratamento")
+
+    imputed_mask = missing_before.reindex(raw.index, fill_value=False)
+    cleaning_summary = pd.Series({
+        "observações recebidas": len(source),
+        "ausentes/não finitos recebidos": int(numeric_source.isna().sum()),
+        "removidos nas bordas": len(source) - len(trimmed),
+        "imputados internamente": int(imputed_mask.sum()),
+        "política": MISSING_VALUE_POLICY,
+        "frequência": source_frequency,
+    }, name="limpeza")
+    cleaning_detail = pd.DataFrame({
+        "original": numeric_source.reindex(raw.index),
+        "tratado": raw,
+        "foi_imputado": imputed_mask,
+    })
+    display(cleaning_summary.to_frame(), cleaning_detail[cleaning_detail.foi_imputado])
+
+    minimum_development = 34 if SERIES_KIND == "returns" else 24
+    if len(raw) < minimum_development + 1:
+        raise ValueError(
+            f"Após a limpeza são necessários ao menos {minimum_development + 1} valores; "
+            f"foram obtidos {len(raw)}"
+        )
+    if not 1 <= MONITORING_HOLDOUT <= len(raw) - minimum_development:
+        raise ValueError(
+            f"MONITORING_HOLDOUT deve preservar ao menos {minimum_development} "
+            "observações de desenvolvimento"
+        )
 
     development_pd = raw.iloc[:-MONITORING_HOLDOUT]
     monitoring_pd = raw.iloc[-MONITORING_HOLDOUT:]
     development = TimeSeries.from_pandas(
-        SERIES_ID, development_pd, frequency=FREQUENCY, timezone_name=TIMEZONE,
-        metadata={"series_kind": SERIES_KIND, "source": "notebook-14"},
+        SERIES_ID, development_pd, frequency=source_frequency, timezone_name=TIMEZONE,
+        metadata={
+            "series_kind": SERIES_KIND, "source": "notebook-14",
+            "missing_value_policy": MISSING_VALUE_POLICY,
+            "imputed_count": int(imputed_mask.sum()),
+        },
     )
 
     repository = MemoryRepository()
@@ -265,8 +338,12 @@ CELLS = [
     """),
     code(r"""
     n_development = len(development_pd)
-    backtest_horizon = min(6, max(1, n_development // 30))
-    initial_train_size = max(40, int(0.65 * n_development))
+    minimum_train_size = 30 if SERIES_KIND == "returns" else 20
+    backtest_horizon = min(6, max(1, n_development // 15))
+    initial_train_size = min(
+        n_development - backtest_horizon,
+        max(minimum_train_size, int(0.65 * n_development)),
+    )
     backtest_step = max(1, backtest_horizon)
     backtest_config = BacktestConfig(
         initial_train_size=initial_train_size,
@@ -492,6 +569,7 @@ CELLS = [
         monitoring_rows.append({
             "timestamp": timestamp,
             "actual": event.actual,
+            "observation_was_imputed": bool(imputed_mask.loc[timestamp]),
             "surprise": event.surprise,
             "cusum_positive": event.cusum_positive,
             "cusum_negative": event.cusum_negative,
@@ -532,6 +610,8 @@ CELLS = [
         "observações carregadas": len(raw),
         "observações finais no motor": len(final_series.values),
         "eventos monitorados": len(monitoring),
+        "valores imputados no total": int(imputed_mask.sum()),
+        "valores imputados no monitoramento": int(monitoring.observation_was_imputed.sum()),
         "eventos com forecast anterior": int(monitoring.forecast_id.notna().sum()),
         "alertas emitidos": int(monitoring.alert_emitted.sum()),
         "modelo selecionado": repr(decision.selected_spec),
@@ -604,5 +684,32 @@ CELLS = [
 ]
 
 
+def preserve_user_loader(path: Path, cells: list[dict]) -> None:
+    """Preserva a célula que o usuário pode ter personalizado no notebook existente."""
+    if not path.exists():
+        return
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    marker = "EDITE SOMENTE ESTA CÉLULA"
+    existing = next(
+        (
+            cell
+            for cell in payload.get("cells", [])
+            if cell.get("cell_type") == "code" and marker in cell.get("source", "")
+        ),
+        None,
+    )
+    generated = next(
+        (
+            cell
+            for cell in cells
+            if cell.get("cell_type") == "code" and marker in cell.get("source", "")
+        ),
+        None,
+    )
+    if existing is not None and generated is not None:
+        generated["source"] = existing["source"]
+
+
 if __name__ == "__main__":
+    preserve_user_loader(PATH, CELLS)
     write_notebook(PATH, CELLS, 14)

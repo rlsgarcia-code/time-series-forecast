@@ -16,7 +16,7 @@ CASES = [
     ("11_change_point.ipynb", ["change-point", "CUSUM", "def best_single_change", "programação dinâmica", "penalidade", "Exercícios"]),
     ("12_cusum_ewma.ipynb", ["Detecção sequencial", "CUSUM", "EWMA", "def two_sided_cusum", "run length", "Exercícios"]),
     ("13_sistema_final.ipynb", ["Sistema integrado", "ForecastEnvelope", "SequentialMonitor", "backtest_registry", "risco de trajetória", "Exercícios"]),
-    ("14_ciclo_completo_usuario.ipynb", ["Ciclo completo", "EDITE SOMENTE ESTA CÉLULA", "rolling-origin", "SelectionPolicy", "diagnose", "process_observation", "Exercícios"]),
+    ("14_ciclo_completo_usuario.ipynb", ["Ciclo completo", "EDITE SOMENTE ESTA CÉLULA", "MISSING_VALUE_POLICY", "rolling-origin", "SelectionPolicy", "diagnose", "process_observation", "Exercícios"]),
 ]
 
 

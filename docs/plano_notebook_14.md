@@ -11,6 +11,9 @@ monitoramento sequencial.
 
 - O notebook possui uma série sintética padrão para permanecer executável sem dados externos.
 - A célula de entrada é marcada com `EDITE SOMENTE ESTA CÉLULA` e deve produzir `USER_SERIES`.
+- Séries curtas são aceitas com backtest adaptativo; o caso de referência possui 57 observações.
+- `NaN`/infinitos são auditados: bordas ausentes são removidas e valores internos seguem uma
+  política explícita (`error`, `ffill` causal ou interpolação temporal não causal).
 - Uma célula separada reúne parâmetros operacionais e flags para GARCH e Markov switching.
 - A cauda da série é reservada antes de qualquer ajuste e revelada somente durante o monitoramento.
 - A caracterização sugere famílias, mas a lista realmente avaliada é exibida explicitamente.
@@ -43,6 +46,7 @@ monitoramento sequencial.
 - Executar integralmente em kernel limpo com a série sintética padrão.
 - Conter ao menos oito células de código e explicações antes de cada decisão.
 - Não usar a cauda reservada na caracterização, no backtest ou na seleção.
+- Executar com 57 observações e valores ausentes internos usando a política causal padrão.
 - Exibir candidatos, métricas, política de seleção e eventual fallback.
 - Expor resíduos, intervalos, caminhos, risco e eventos de monitoramento.
 - Integrar validação ao `Makefile` e teste estrutural à suíte.
