@@ -17,7 +17,7 @@ validação do contrato temporal
     ↓
 caracterização e geração de evidências
     ↓
-definição explícita dos modelos candidatos
+CandidatePolicy: inclusão/exclusão explicável dos modelos candidatos
     ↓
 backtest rolling-origin sem vazamento
     ↓
@@ -100,17 +100,50 @@ figure = engine.plot_characterization("demanda", max_lag=24)
 | Volatilidade condicional | ARCH-LM com `p < 0,05` | GARCH(1,1) |
 | Possível mudança estrutural | quebra única reduz ≥ 15% do custo sem quebra | Markov switching, nível local |
 
-Essas regras produzem `profile.evidence` e `profile.suggested_models`. Elas não promovem modelos e
-não escolhem ordens `(p,d,q)`. O código está em
+Essas regras produzem `profile.evidence` e `profile.suggested_models`. Elas não promovem modelos.
+Quando a aplicação deseja converter as evidências em ordens concretas, usa a política explicável
+descrita a seguir. O código da caracterização está em
 [`diagnostics.characterize_series()`](src/time_series_lab/diagnostics.py); a fundamentação aparece
 principalmente nos Notebooks [03](notebooks/03_arp_maq_arma.ipynb),
 [04](notebooks/04_nao_estacionariedade_arima.ipynb),
 [06](notebooks/06_arch_garch.ipynb) e [11](notebooks/11_change_point.ipynb).
 
+### Política explicável de candidatos
+
+`CandidatePolicy` transforma a caracterização em um conjunto **limitado de hipóteses para
+backtest**, sem declarar um vencedor:
+
+```python
+from time_series_lab import CandidatePolicy
+
+policy = CandidatePolicy(
+    differencing="auto",      # auto, compare ou never
+    garch="auto",             # auto, always ou never
+    markov_switching="auto",  # auto, always ou never
+    max_ar_order=2,
+    max_ma_order=2,
+    max_candidates=12,
+)
+plan = engine.propose_candidates("demanda", policy=policy, profile=profile)
+
+plan.candidates               # especificações que irão ao backtest
+plan.to_frame()               # inclusões e exclusões, regras, motivos e evidências
+print(plan.explain())          # explicação textual reproduzível
+```
+
+A política mantém benchmarks de média, AR(1) e nível local; usa ACF/PACF para limitar ordens;
+abre `d=1` conforme ADF/KPSS; e somente inclui GARCH/Markov quando os gates conceituais,
+estatísticos e amostrais forem satisfeitos. Um orçamento impede que uma grade excessiva
+sobreajuste a própria janela de seleção. Cada exclusão também é registrada — por exemplo,
+“GARCH automático exige retornos” ou “Markov switching exige ao menos 80 observações”.
+
+Caracterização e política apenas definem **quem compete**. O vencedor continua sendo determinado
+por rolling-origin, guardrails de cobertura e CRPS.
+
 ## 3. Modelos disponíveis
 
-O motor avalia somente os objetos fornecidos em `candidates`. Por exemplo, três ordens ARIMA
-diferentes são três candidatos distintos.
+O motor avalia somente os objetos fornecidos em `candidates`, sejam eles declarados manualmente ou
+produzidos por `CandidatePolicy`. Três ordens ARIMA diferentes são três candidatos distintos.
 
 | Especificação | Processo representado | Forecast produzido |
 |---|---|---|
@@ -361,11 +394,9 @@ O repositório em memória abaixo é didático. Uma aplicação real deve implem
 ```python
 from examples.memory_repository import MemoryRepository
 from time_series_lab import (
-    AR1Spec,
-    ARIMASpec,
     BacktestConfig,
+    CandidatePolicy,
     ForecastEngine,
-    LocalLevelSpec,
     PromotionPolicy,
     SelectionPolicy,
     TimeSeries,
@@ -375,20 +406,16 @@ engine = ForecastEngine(repository=MemoryRepository())
 engine.register_series(TimeSeries.from_pandas("demanda", pandas_series))
 
 profile = engine.characterize("demanda")
-
-candidates = [
-    AR1Spec(),
-    ARIMASpec(order=(1, 0, 1)),
-    ARIMASpec(order=(1, 1, 1)),
-    LocalLevelSpec(),
-]
-
-# Acrescente GARCH apenas para retornos/erros com volatilidade condicional.
-# Acrescente Markov switching quando houver hipótese substantiva de regimes.
+candidate_plan = engine.propose_candidates(
+    "demanda",
+    profile=profile,
+    policy=CandidatePolicy(max_candidates=12),
+)
+print(candidate_plan.explain())
 
 training = engine.run_training_cycle(
     "demanda",
-    candidates=candidates,
+    candidates=candidate_plan.candidates,
     backtest=BacktestConfig(initial_train_size=180, horizon=6, step=5),
     selection=SelectionPolicy(primary_metric="crps", coverage_range=(0.80, 1.00)),
     promotion=PromotionPolicy(automatic=True),
@@ -405,6 +432,7 @@ simulation = engine.simulate("demanda", horizon=12, n_paths=10_000, seed=42)
 |---|---|---|
 | Contrato temporal e tipos | [`contracts.py`](src/time_series_lab/contracts.py) | [Notebook 08](notebooks/08_sistema_integrado.ipynb) |
 | Caracterização e resíduos | [`diagnostics.py`](src/time_series_lab/diagnostics.py) | Notebooks [02](notebooks/02_estimacao_diagnostico_ar1.ipynb), [03](notebooks/03_arp_maq_arma.ipynb), [04](notebooks/04_nao_estacionariedade_arima.ipynb) e [06](notebooks/06_arch_garch.ipynb) |
+| Geração explicável de candidatos | [`candidate_policy.py`](src/time_series_lab/candidate_policy.py) | [Notebook 14](notebooks/14_ciclo_completo_usuario.ipynb) |
 | Modelos concretos | [`adapters.py`](src/time_series_lab/adapters.py) | Notebooks 01–06, 09 e 10 |
 | Backtest e seleção | [`engine.py`](src/time_series_lab/engine.py) | [Notebook 07](notebooks/07_backtesting_selecao.ipynb) |
 | Distribuições e artefatos | [`contracts.py`](src/time_series_lab/contracts.py) | [Notebook 13](notebooks/13_sistema_final.ipynb) |

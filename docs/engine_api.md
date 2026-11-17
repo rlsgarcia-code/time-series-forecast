@@ -77,7 +77,7 @@ risk = engine.assess_risk(simulation, ThresholdRisk(limit=5.0))
 | Grupo | Métodos | Resultado |
 |---|---|---|
 | Dados | `register_series`, `append_history`, `get_series`, `list_series` | série validada e versionada |
-| Diagnóstico | `characterize`, `diagnose`, `plot_characterization`, `plot_residuals`, `detect_changes` | perfil, resíduos, figuras e change-points |
+| Diagnóstico | `characterize`, `propose_candidates`, `diagnose`, `plot_characterization`, `plot_residuals`, `detect_changes` | perfil, plano explicável, resíduos, figuras e change-points |
 | Modelagem | `fit`, `backtest`, `select`, `promote`, `run_training_cycle` | modelo, relatório, decisão e promoção auditáveis |
 | Forecast | `forecast`, `get_forecast` | distribuição preditiva preservada |
 | Simulação e risco | `simulate`, `assess_risk` | trajetórias conjuntas e probabilidades de evento |
@@ -135,7 +135,45 @@ ADF e KPSS são usados em conjunto porque possuem hipóteses nulas diferentes. A
 ordens candidatas, mas não substituem backtest. O sinal de quebra estrutural é uma evidência para
 investigação, não uma prova de regime oculto.
 
-### 6.2 Resíduos depois do ajuste
+### 6.2 Política explicável de candidatos
+
+```python
+from time_series_lab import CandidatePolicy
+
+policy = CandidatePolicy(
+    differencing="auto",
+    garch="auto",
+    markov_switching="auto",
+    max_ar_order=2,
+    max_ma_order=2,
+    max_total_order=3,
+    max_candidates=12,
+)
+plan = engine.propose_candidates(
+    "demanda",
+    policy=policy,
+    profile=profile,       # evita caracterizar novamente
+    series_kind="level",  # ou "returns"
+)
+```
+
+`CandidatePlan.candidates` alimenta diretamente `backtest()`. `plan_id` identifica de forma
+determinística a política, evidências e decisões. `decisions` e `to_frame()` registram
+também as exclusões, com a regra, o motivo e os valores observados. `explain()` oferece a mesma
+trilha em texto. A política:
+
+- mantém baselines simples para verificar se complexidade realmente ajuda;
+- calcula a faixa aproximada de significância da ACF/PACF e limita `(p,q)`;
+- classifica ADF/KPSS como `stationary`, `nonstationary` ou `ambiguous`;
+- em `differencing="auto"`, abre `d=1` nos dois últimos casos;
+- condiciona GARCH a retornos, ARCH-LM e amostra mínima no modo automático;
+- condiciona Markov switching ao sinal de quebra e amostra mínima;
+- aplica `max_candidates` para controlar sobreajuste da seleção.
+
+Os modos `always` e `compare` forçam hipóteses para comparação, mas não as promovem. A escolha
+continua em `select()` depois do backtest.
+
+### 6.3 Resíduos depois do ajuste
 
 Após ajustar ou promover um modelo:
 
@@ -171,7 +209,7 @@ deve buscar resíduos sem autocorrelação remanescente e avaliar separadamente 
 volatilidade. Um p-valor baixo não determina sozinho qual modelo vencerá; essa decisão continua no
 backtest fora da amostra.
 
-### 6.3 Famílias disponíveis
+### 6.4 Famílias disponíveis
 
 Especificações concretas incluídas:
 

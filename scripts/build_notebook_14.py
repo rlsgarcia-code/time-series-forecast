@@ -53,7 +53,7 @@ CELLS = [
         "from dataclasses import asdict\n"
         "from examples.memory_repository import MemoryRepository\n"
         "from time_series_lab import (\n"
-        "    AR1Spec, ARIMASpec, BacktestConfig, ForecastEngine, GARCH11Spec,\n"
+        "    AR1Spec, ARIMASpec, BacktestConfig, CandidatePolicy, ForecastEngine, GARCH11Spec,\n"
         "    LocalLevelSpec, MonitoringPolicy, Observation, SelectionPolicy,\n"
         "    ThresholdRisk, TimeSeries, TwoRegimeGaussianSpec, ValidationError,\n"
         ")"
@@ -96,9 +96,10 @@ CELLS = [
     - `MONITORING_HOLDOUT` define quantas observações finais ficam invisíveis durante a escolha.
     - `MISSING_VALUE_POLICY="ffill"` usa apenas o passado e é compatível com avaliação causal.
       `"interpolate"` usa os dois lados do ponto ausente e deve ser uma decisão consciente.
-    - `SERIES_KIND="returns"` autoriza GARCH; em níveis genéricos ele não entra automaticamente.
-    - Markov switching é opcional porque seu ajuste em cada origem custa mais e exige uma hipótese
-      substantiva de regimes.
+    - `CANDIDATE_DIFFERENCING` controla se $d=1$ depende dos testes (`auto`), sempre concorre
+      (`compare`) ou é proibido (`never`).
+    - GARCH e Markov switching usam gates explicáveis; `auto` exige evidência e amostra mínima.
+      `always` força a hipótese, mas ainda deixa o backtest decidir.
     - O fallback de cobertura é explícito: se nenhum candidato passar o guardrail, podemos parar ou
       selecionar apenas por CRPS, registrando que o guardrail foi relaxado.
     """),
@@ -112,7 +113,10 @@ CELLS = [
     FORECAST_HORIZON = 12
     N_SIMULATION_PATHS = 5_000
     RISK_LIMIT = None            # None usa média + 2 desvios do desenvolvimento
-    INCLUDE_MARKOV = False
+    CANDIDATE_DIFFERENCING = "auto"  # "auto", "compare" ou "never"
+    CANDIDATE_GARCH = "auto"         # "auto", "always" ou "never"
+    CANDIDATE_MARKOV = "auto"        # "auto", "always" ou "never"
+    MAX_CANDIDATES = 12
     ALLOW_COVERAGE_FALLBACK = True
     RANDOM_SEED = 1401
 
@@ -264,13 +268,16 @@ CELLS = [
     plt.show()
     """),
     md(r"""
-    ## 6. Candidatos realmente avaliados
+    ## 6. Candidate Policy: da evidência às hipóteses
 
-    A lista abaixo é a fonte de verdade do backtest. Incluímos candidatos simples e interpretáveis.
-    GARCH entra apenas quando `SERIES_KIND="returns"`; Markov switching só entra quando habilitado.
+    A lista abaixo continua sendo a fonte de verdade do backtest, mas agora é produzida por uma
+    política pública e auditável. A caracterização **não escolhe o vencedor**: ela decide quais
+    hipóteses merecem competir e registra também por que outras foram excluídas.
 
-    A caracterização poderia orientar uma busca maior, mas expandir muitas ordens sem separar uma
-    janela de pesquisa aumenta o risco de escolher por acaso.
+    A política sempre mantém benchmarks simples, usa ACF/PACF para limitar ordens, usa ADF/KPSS
+    para abrir ou podar $d=1$, e aplica gates amostrais/conceituais a GARCH e Markov switching.
+    `MAX_CANDIDATES` limita a busca porque testar uma grade enorme na mesma amostra também produz
+    sobreajuste de seleção.
 
     As famílias correspondem às formulações:
 
@@ -290,25 +297,29 @@ CELLS = [
     tendência, variância ou regimes; por isso todas precisam ser julgadas fora da amostra.
     """),
     code(r"""
-    candidates = [
-        AR1Spec(),
-        ARIMASpec(order=(1, 0, 0), simulation_paths=300),
-        ARIMASpec(order=(1, 0, 1), simulation_paths=300),
-        LocalLevelSpec(),
-    ]
-    if profile.adf_pvalue >= 0.05 or profile.kpss_pvalue <= 0.05:
-        candidates.append(ARIMASpec(order=(1, 1, 1), simulation_paths=300))
-    else:
-        candidates.append(ARIMASpec(order=(2, 0, 0), simulation_paths=300))
-    if SERIES_KIND == "returns":
-        candidates.append(GARCH11Spec(mean="constant", simulation_paths=500))
-    if INCLUDE_MARKOV:
-        candidates.append(TwoRegimeGaussianSpec(max_iterations=200))
+    candidate_policy = CandidatePolicy(
+        differencing=CANDIDATE_DIFFERENCING,
+        garch=CANDIDATE_GARCH,
+        markov_switching=CANDIDATE_MARKOV,
+        max_candidates=MAX_CANDIDATES,
+        max_ar_order=2,
+        max_ma_order=2,
+        max_total_order=3,
+        simulation_paths=300,
+    )
+    candidate_plan = engine.propose_candidates(
+        SERIES_ID,
+        policy=candidate_policy,
+        profile=profile,
+        series_kind=SERIES_KIND,
+    )
+    candidates = list(candidate_plan.candidates)
 
-    candidate_labels = {
-        f"{number:02d}": repr(spec) for number, spec in enumerate(candidates, start=1)
-    }
-    pd.Series(candidate_labels, name="especificação avaliada").to_frame()
+    display(
+        pd.Series(candidate_plan.summary, name="valor").to_frame(),
+        candidate_plan.to_frame(include_excluded=True),
+    )
+    print(candidate_plan.explain())
     """),
     md(r"""
     ## 7. Backtest rolling-origin
@@ -650,7 +661,7 @@ CELLS = [
     1. Adicione `ARIMASpec(order=(2,1,2))` e compare CRPS, cobertura e resíduos.
     2. Desative `ALLOW_COVERAGE_FALLBACK` e observe a falha quando nenhum modelo é elegível.
     3. Use uma série de retornos, configure `SERIES_KIND="returns"` e avalie GARCH.
-    4. Habilite `INCLUDE_MARKOV` somente depois de formular uma hipótese de regimes.
+    4. Troque `CANDIDATE_MARKOV` para `"always"` e examine a justificativa e o custo computacional.
     5. Altere `RISK_LIMIT` e compare risco marginal, qualquer horizonte e primeira passagem.
     6. Aumente a cauda reservada e compare falso alarme, atraso e custo computacional do refit.
 
@@ -670,8 +681,9 @@ CELLS = [
     exercise_candidates = [*candidates, ARIMASpec(order=(2, 1, 2), simulation_paths=300)]
     print("Candidatos atuais:", len(candidates))
     print("Candidatos após a extensão:", len(exercise_candidates))
-    # Para executar a comparação, troque `candidates` por `exercise_candidates`
-    # na célula de backtest e execute novamente a partir daquela seção.
+    print("Hipótese manual fora da policy:", exercise_candidates[-1])
+    # Para executar a comparação, troque `candidates` por `exercise_candidates` na célula
+    # de backtest. Em produção, registre essa exceção junto com sua justificativa de domínio.
     """),
     md(r"""
     ## Conclusão

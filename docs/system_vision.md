@@ -112,7 +112,8 @@ O produto será desenvolvido incrementalmente a partir dos notebooks de aprendiz
 - change-point offline, CUSUM retrospectivo, segmentação penalizada e avaliação: Notebook 11.
 - CUSUM/EWMA sequenciais, ARL, calibração de limiares e atraso de detecção: Notebook 12.
 - integração de artefatos imutáveis, monitor causal, risco e política auditável: Notebook 13.
-- execução guiada do ciclo completo a partir de uma `pandas.Series`: Notebook 14.
+- execução guiada do ciclo completo a partir de uma `pandas.Series`, com política explicável de
+  geração de candidatos: Notebook 14.
 
 O Notebook 13 conclui o protótipo local e univariado; o Notebook 14 o transforma em um fluxo
 executável com uma única célula de entrada para os dados do usuário. Banco transacional, execução distribuída,

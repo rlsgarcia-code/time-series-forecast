@@ -10,6 +10,7 @@ import pandas as pd
 from scipy.stats import norm
 
 from .adapters import built_in_adapters
+from .candidate_policy import CandidatePlan, CandidatePolicy
 from .change_points import optimal_mean_segmentation
 from .detectors import built_in_detector_factories
 from .diagnostics import (
@@ -124,6 +125,27 @@ class ForecastEngine:
 
     def characterize(self, series_id: str, *, max_lag: int = 20) -> SeriesProfile:
         return characterize_series(self.repository.get_series(series_id), max_lag=max_lag)
+
+    def propose_candidates(
+        self,
+        series_id: str,
+        *,
+        policy: CandidatePolicy | None = None,
+        profile: SeriesProfile | None = None,
+        series_kind: str | None = None,
+        max_lag: int = 20,
+    ) -> CandidatePlan:
+        """Propõe hipóteses explicáveis; não ajusta nem seleciona um vencedor."""
+        series = self.repository.get_series(series_id)
+        if profile is not None and profile.series_id != series_id:
+            raise ValidationError("profile pertence a outra série")
+        profile = profile or characterize_series(series, max_lag=max_lag)
+        kind = series_kind or str(series.metadata.get("series_kind", "level"))
+        return (policy or CandidatePolicy()).propose(
+            profile,
+            series_kind=kind,
+            available_families=self.models.families,
+        )
 
     def diagnose(
         self,

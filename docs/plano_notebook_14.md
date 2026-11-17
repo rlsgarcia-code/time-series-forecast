@@ -16,7 +16,8 @@ monitoramento sequencial.
   política explícita (`error`, `ffill` causal ou interpolação temporal não causal).
 - Uma célula separada reúne parâmetros operacionais e flags para GARCH e Markov switching.
 - A cauda da série é reservada antes de qualquer ajuste e revelada somente durante o monitoramento.
-- A caracterização sugere famílias, mas a lista realmente avaliada é exibida explicitamente.
+- A caracterização alimenta `CandidatePolicy`; inclusões e exclusões exibem regra, motivo e
+  evidência, sem confundir geração de hipóteses com escolha do vencedor.
 - O backtest usa rolling-origin; cobertura é guardrail e CRPS é a métrica primária.
 - Se o guardrail eliminar todos os modelos, um fallback só ocorre quando autorizado pela
   configuração e fica registrado como tal.
@@ -31,7 +32,7 @@ monitoramento sequencial.
 4. Configuração e validação do contrato temporal.
 5. Separação desenvolvimento/monitoramento.
 6. Caracterização, evidências e visualização.
-7. Construção explícita dos candidatos.
+7. Construção explicável e limitada dos candidatos por `CandidatePolicy`.
 8. Backtest rolling-origin e placar.
 9. Seleção, ajuste completo e promoção.
 10. Resíduos e testes de adequação.

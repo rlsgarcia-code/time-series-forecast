@@ -1,6 +1,7 @@
 """Ferramentas didáticas para o Time Series Lab."""
 
 from .engine import ForecastEngine
+from .candidate_policy import CandidateDecision, CandidatePlan, CandidatePolicy
 from .contracts import (
     AR1Spec,
     ARIMASpec,
@@ -148,6 +149,9 @@ __all__ = [
     "BacktestReport",
     "BaselineScenario",
     "ChangePointReport",
+    "CandidateDecision",
+    "CandidatePlan",
+    "CandidatePolicy",
     "CycleResult",
     "CusumDetector",
     "CusumResult",
