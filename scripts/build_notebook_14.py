@@ -116,7 +116,7 @@ CELLS = [
     CANDIDATE_DIFFERENCING = "auto"  # "auto", "compare" ou "never"
     CANDIDATE_GARCH = "auto"         # "auto", "always" ou "never"
     CANDIDATE_MARKOV = "auto"        # "auto", "always" ou "never"
-    MAX_CANDIDATES = 12
+    MAX_CANDIDATES = 14
     ALLOW_COVERAGE_FALLBACK = True
     RANDOM_SEED = 1401
 
@@ -349,7 +349,10 @@ CELLS = [
     """),
     code(r"""
     n_development = len(development_pd)
-    minimum_train_size = 30 if SERIES_KIND == "returns" else 20
+    specialized_small_sample = any(
+        spec.family in {"garch11", "markov_switching"} for spec in candidates
+    )
+    minimum_train_size = 30 if SERIES_KIND == "returns" or specialized_small_sample else 20
     backtest_horizon = min(6, max(1, n_development // 15))
     initial_train_size = min(
         n_development - backtest_horizon,

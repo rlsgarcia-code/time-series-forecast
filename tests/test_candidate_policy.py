@@ -100,14 +100,34 @@ def test_compare_mode_includes_level_and_differenced_arima_hypotheses() -> None:
 
 def test_specialized_families_have_explicit_gates() -> None:
     engine = make_engine(ar1_values(n=57), kind="level")
-    plan = engine.propose_candidates("candidate-series")
+    plan = engine.propose_candidates(
+        "candidate-series",
+        policy=CandidatePolicy(minimum_markov_observations=60),
+    )
     excluded = plan.to_frame().query("status == 'excluded'")
 
     assert not any(isinstance(spec, GARCH11Spec) for spec in plan.candidates)
     assert "garch_gate" in set(excluded.rule)
     assert "markov_gate" in set(excluded.rule)
     assert any("returns" in reason for reason in excluded.reason)
-    assert any("80" in reason for reason in excluded.reason)
+    assert any("60" in reason for reason in excluded.reason)
+
+
+def test_markov_can_be_proposed_with_less_than_80_observations() -> None:
+    rng = np.random.default_rng(19)
+    values = np.r_[rng.normal(0.0, 0.25, 29), rng.normal(2.0, 0.25, 28)]
+    engine = make_engine(values, kind="level")
+    plan = engine.propose_candidates(
+        "candidate-series",
+        policy=CandidatePolicy(max_candidates=14),
+    )
+
+    markov_decision = next(
+        item for item in plan.decisions if item.family == "markov_switching"
+    )
+    assert markov_decision.status == "included"
+    assert markov_decision.evidence["free_parameters"] == 6
+    assert "exploratória" in markov_decision.reason
 
 
 def test_policy_validates_configuration_and_profile_identity() -> None:

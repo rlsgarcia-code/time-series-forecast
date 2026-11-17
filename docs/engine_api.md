@@ -167,7 +167,8 @@ trilha em texto. A política:
 - classifica ADF/KPSS como `stationary`, `nonstationary` ou `ambiguous`;
 - em `differencing="auto"`, abre `d=1` nos dois últimos casos;
 - condiciona GARCH a retornos, ARCH-LM e amostra mínima no modo automático;
-- condiciona Markov switching ao sinal de quebra e amostra mínima;
+- condiciona Markov switching ao sinal de quebra e a pelo menos 36 observações — seis por cada
+  parâmetro livre do modelo de dois regimes; abaixo de 80, marca a hipótese como exploratória;
 - aplica `max_candidates` para controlar sobreajuste da seleção.
 
 Os modos `always` e `compare` forçam hipóteses para comparação, mas não as promovem. A escolha

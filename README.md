@@ -135,7 +135,9 @@ A política mantém benchmarks de média, AR(1) e nível local; usa ACF/PACF par
 abre `d=1` conforme ADF/KPSS; e somente inclui GARCH/Markov quando os gates conceituais,
 estatísticos e amostrais forem satisfeitos. Um orçamento impede que uma grade excessiva
 sobreajuste a própria janela de seleção. Cada exclusão também é registrada — por exemplo,
-“GARCH automático exige retornos” ou “Markov switching exige ao menos 80 observações”.
+“GARCH automático exige retornos” ou “sinal de mudança abaixo do limiar”. Para Markov switching
+de dois regimes, o mínimo padrão é 36: seis observações para cada um dos seis parâmetros livres.
+Abaixo de 80, uma inclusão é marcada explicitamente como hipótese exploratória.
 
 Caracterização e política apenas definem **quem compete**. O vencedor continua sendo determinado
 por rolling-origin, guardrails de cobertura e CRPS.

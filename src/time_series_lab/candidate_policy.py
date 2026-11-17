@@ -111,7 +111,9 @@ class CandidatePolicy:
     garch: CandidateMode = "auto"
     markov_switching: CandidateMode = "auto"
     minimum_garch_observations: int = 40
-    minimum_markov_observations: int = 80
+    # Dois regimes gaussianos têm 6 parâmetros livres: 2 médias, 2 escalas e
+    # 2 probabilidades de transição. Seis observações por parâmetro dão 36.
+    minimum_markov_observations: int = 36
     change_ratio_threshold: float = 0.15
     simulation_paths: int = 300
 
@@ -263,19 +265,21 @@ class CandidatePolicy:
         # Grade d=0: primeira ordem sempre; ordens maiores só com barras significativas.
         level_p = max(1, level_p if serial_memory else 1)
         level_q = max(1, level_q if serial_memory else 1)
+        level_evidence = {
+            **common_evidence,
+            "pacf_order_signal": level_p,
+            "acf_order_signal": level_q,
+            "correlation_threshold": round(threshold, 4),
+        }
+        # Primeiro reservamos espaço para a grade mínima e para famílias especializadas.
         self._add_arima_grid(
             add,
             d=0,
-            max_p=level_p,
-            max_q=level_q,
+            max_p=1,
+            max_q=1,
             rule="level_acf_pacf",
             reason_prefix="ACF/PACF do nível propõem",
-            evidence={
-                **common_evidence,
-                "pacf_order_signal": level_p,
-                "acf_order_signal": level_q,
-                "correlation_threshold": round(threshold, 4),
-            },
+            evidence=level_evidence,
         )
 
         use_difference = self.differencing == "compare" or (
@@ -284,19 +288,20 @@ class CandidatePolicy:
         if use_difference:
             difference_p = max(1, difference_p)
             difference_q = max(1, difference_q)
+            difference_evidence = {
+                **common_evidence,
+                "stationarity": stationarity,
+                "differenced_pacf_order_signal": difference_p,
+                "differenced_acf_order_signal": difference_q,
+            }
             self._add_arima_grid(
                 add,
                 d=1,
-                max_p=difference_p,
-                max_q=difference_q,
+                max_p=1,
+                max_q=1,
                 rule="differenced_acf_pacf",
                 reason_prefix="ADF/KPSS e ACF/PACF da diferença propõem",
-                evidence={
-                    **common_evidence,
-                    "stationarity": stationarity,
-                    "differenced_pacf_order_signal": difference_p,
-                    "differenced_acf_order_signal": difference_q,
-                },
+                evidence=difference_evidence,
             )
         else:
             reason = (
@@ -318,6 +323,29 @@ class CandidatePolicy:
             profile, series_kind, available, add, exclude
         )
         self._consider_markov(profile, available, add, exclude)
+
+        # Só depois das famílias especializadas usamos o restante do orçamento
+        # para ordens 2 sugeridas pelas correlações.
+        if level_p > 1 or level_q > 1:
+            self._add_arima_grid(
+                add,
+                d=0,
+                max_p=level_p,
+                max_q=level_q,
+                rule="level_acf_pacf",
+                reason_prefix="ACF/PACF do nível propõem",
+                evidence=level_evidence,
+            )
+        if use_difference and (difference_p > 1 or difference_q > 1):
+            self._add_arima_grid(
+                add,
+                d=1,
+                max_p=difference_p,
+                max_q=difference_q,
+                rule="differenced_acf_pacf",
+                reason_prefix="ADF/KPSS e ACF/PACF da diferença propõem",
+                evidence=difference_evidence,
+            )
 
         summary = {
             "stationarity_assessment": stationarity,
@@ -439,6 +467,8 @@ class CandidatePolicy:
             "change_ratio": round(profile.change_improvement_ratio, 5),
             "threshold": self.change_ratio_threshold,
             "nobs": profile.nobs,
+            "free_parameters": 6,
+            "observations_per_parameter": round(profile.nobs / 6, 2),
         }
         if self.markov_switching == "never":
             exclude(rule="markov_gate", family="markov_switching", spec=spec,
@@ -453,6 +483,14 @@ class CandidatePolicy:
             exclude(rule="markov_gate", family="markov_switching", spec=spec,
                     reason="sinal de mudança estrutural abaixo do limiar", evidence=evidence)
         else:
+            short_sample_note = (
+                "; amostra curta: interpretar a hipótese de regimes como exploratória"
+                if profile.nobs < 80
+                else ""
+            )
             add(spec, rule="regime_signal",
-                reason="sinal de quebra e tamanho amostral sustentam testar dois regimes",
+                reason=(
+                    "sinal de quebra e razão observações/parâmetro sustentam testar dois regimes"
+                    + short_sample_note
+                ),
                 evidence=evidence)
