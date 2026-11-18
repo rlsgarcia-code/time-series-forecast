@@ -116,7 +116,8 @@ O produto será desenvolvido incrementalmente a partir dos notebooks de aprendiz
 - integração de artefatos imutáveis, monitor causal, risco e política auditável: Notebook 13.
 - execução guiada do ciclo completo a partir de uma `pandas.Series`, com política explicável de
   geração de candidatos: Notebook 14.
-- composição de séries previstas/conhecidas, cópula residual, covariância e árvore coerente:
+- composição detalhada de séries previstas/conhecidas em $Y=g(X_1,X_2,X_3)$, com objetos de baixo
+  nível, cópula residual, covariância e distribuição empírica:
   Notebook 15.
 - ciclo guiado a partir de `dict[str, list[pd.Series]]`, com grupos e total automáticos:
   Notebook 16.

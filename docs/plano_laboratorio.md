@@ -50,7 +50,7 @@ O laboratório não será apenas uma coleção de notebooks. Ao final, o reposit
 | 12 | CUSUM e EWMA | Como detectar drift sequencialmente? | estatísticas online, ARL, limiares e compromisso atraso/falso alarme | concluído |
 | 13 | Sistema integrado final | Como combinar modelos, detectores, risco e alertas? | pipeline persistente com políticas e auditoria end-to-end | concluído |
 | 14 | Ciclo completo do usuário | Como levar uma `pandas.Series` por todo o motor? | caracterização, candidatos, seleção, risco e monitoramento guiados | concluído |
-| 15 | Composição probabilística e hierárquica | Como combinar séries previstas e conhecidas sem perder dependência? | grafo, cópula residual, vintages, covariância e árvore coerente | concluído |
+| 15 | Composição probabilística de variáveis | Como obter a distribuição de $Y=g(X_1,X_2,X_3)$? | objetos de baixo nível, marginais, cópula, broadcast e distribuição empírica | concluído |
 | 16 | Dicionário hierárquico do usuário | Como executar a árvore a partir de grupos de `pd.Series`? | entrada editável, folhas, grupos, total, dependência e risco | concluído |
 
 O plano de cada notebook é refinado e documentado em `docs/plano_notebook_XX.md` antes de sua

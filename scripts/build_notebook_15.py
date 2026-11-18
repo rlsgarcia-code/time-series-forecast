@@ -1,4 +1,4 @@
-"""Constrói o Notebook 15: composição probabilística e hierárquica."""
+"""Constrói o Notebook 15: distribuição de Y = g(X, Y, Z)."""
 
 from pathlib import Path
 
@@ -11,150 +11,196 @@ PATH = ROOT / "notebooks" / "15_composicao_probabilistica_hierarquica.ipynb"
 
 CELLS = [
     md(r"""
-    # Notebook 15 — Composição probabilística e hierárquica
+    # Notebook 15 — De variáveis previstas à distribuição de $Y=g(X_1,X_2,X_3)$
 
-    **Público:** usuários do `ForecastEngine` que precisam transformar várias previsões em
-    resultados derivados e agregá-los em uma árvore.
+    **Pergunta central:** se $X_1$, $X_2$ e $X_3$ são forecasts probabilísticos ou valores futuros
+    já conhecidos, como obtemos a distribuição de uma função
 
-    **Pré-requisitos:** distribuição preditiva, rolling-origin, CRPS e leitura do Notebook 14.
+    $$Y=g(X_1,X_2,X_3)?$$
+
+    Este capítulo para deliberadamente antes da árvore hierárquica. Primeiro construiremos uma
+    única saída `result_y` e abriremos cada etapa executada por `compose()`: marginais, dependência,
+    caminhos conjuntos, aplicação de $g$ e distribuição empírica resultante. Folhas e grupos são
+    apenas uma repetição desse mesmo mecanismo e ficam para o Notebook 16.
 
     **Ao final você será capaz de:**
 
-    1. representar séries previstas, conhecidas e constantes no mesmo grafo;
-    2. entender por que multiplicação exige trajetórias conjuntas e covariância;
-    3. selecionar modelos pelo resultado derivado, não apenas pelas entradas;
-    4. construir folhas, grupos e total coerentes caminho a caminho;
-    5. auditar dependência, causalidade, risco e limitações da primeira versão.
-
-    O exemplo é totalmente sintético e genérico. Nenhuma regra de negócio privada é armazenada
-    neste notebook ou nos artefatos persistidos pelo motor.
+    1. distinguir distribuição marginal de distribuição conjunta;
+    2. combinar variáveis previstas, séries conhecidas e escalares;
+    3. entender onde a covariância entra em uma função não linear;
+    4. reconstruir manualmente os caminhos produzidos pelo motor;
+    5. obter média, variância, quantis, CDF e risco da saída derivada.
     """),
     md(r"""
-    ## 1. O fluxo
+    ## 1. A mecânica em cinco passos
+
+    Para horizonte $H$ e $M$ simulações, cada entrada será representada por uma matriz
+    `(M, H)`:
 
     ```text
-    séries históricas ─→ modelos marginais ─→ trajetórias independentes
-                                                  │
-    erros rolling-origin ─→ cópula residual ──────┤
-                                                  ▼
-    séries conhecidas ─────────────────────→ trajetórias conjuntas
-                                                  │
-                                                  ▼
-                                  grafo → folhas → grupos → total → risco
+    1. modelos marginais  → X₁, X₂, X₃ com M caminhos cada
+    2. erros de backtest  → dependência residual entre as entradas previstas
+    3. cópula por ranks   → caminhos conjuntos alinhados
+    4. função caminho a caminho → Y[m,h] = g(X₁[m,h], X₂[m,h], X₃[m,h])
+    5. resumo das linhas → distribuição empírica de Y em cada horizonte
     ```
 
-    Os agregados são calculados sobre os mesmos caminhos das folhas. Nesta versão eles não
-    corrigem a média das folhas: há coerência contábil, mas ainda não há reconciliação MinT nem
-    modelo global multivariado.
+    Uma entrada conhecida não precisa ser simulada: seu vetor de horizonte é repetido nas $M$
+    linhas. Isso equivale a uma distribuição degenerada com variância zero.
     """),
     setup_cell(
         "from examples.memory_repository import MemoryRepository\n"
         "from time_series_lab import (\n"
-        "    BacktestConfig, CandidatePolicy, CompositionPolicy, ForecastEngine,\n"
-        "    ThresholdRisk,\n"
+        "    BacktestConfig, CandidatePolicy, CompositionPolicy, CompositionRun,\n"
+        "    DependencyDiagnostics, EmpiricalDistribution, ForecastEngine,\n"
+        "    ModelAdapter, ModelRun, PredictiveDistribution, ThresholdRisk,\n"
+        ")\n"
+        "from time_series_lab.composition import (\n"
+        "    collect_leaves, evaluate_outputs, impose_rank_dependence, materialize_leaves,\n"
         ")"
     ),
     md(r"""
-    ## 2. Dados sintéticos com dependência conhecida
+    ### Objetos de baixo nível que aparecerão
 
-    Simularemos dois drivers AR(1) cujas inovações contemporâneas têm correlação positiva. A
-    dependência relevante não é a correlação entre níveis observados, mas a correlação entre os
-    erros de previsão sincronizados: é essa informação ainda não explicada pelos modelos que deve
-    coordenar os caminhos futuros.
+    | Objeto | Responsabilidade |
+    |---|---|
+    | `ModelRun` | modelo ajustado, cutoff, revisão, especificação e estado estimado |
+    | `ModelAdapter` | reconstrói o forecast do modelo sem conhecer a aplicação |
+    | `PredictiveDistribution` | contrato marginal: média, variância, CDF, quantis e `sample()` |
+    | `DependencyDiagnostics` | correlação residual, shrinkage, quantidade de pares e fallback |
+    | `ForecastVariable` | nó imutável do grafo e seus operandos |
+    | `EmpiricalDistribution` | distribuição construída diretamente de uma matriz de caminhos |
+    | `CompositionRun` | manifesto que congela modelos, revisões, hashes e dependência |
+
+    Usaremos esses objetos diretamente. `ForecastEngine.compose()` aparecerá somente depois de a
+    mecânica de baixo nível produzir a distribuição completa de `result_y`.
+    """),
+    md(r"""
+    ## 2. Três entradas: duas previstas e uma configurável
+
+    Simularemos três processos correlacionados. Por padrão, $X_1$ e $X_2$ serão previstos e $X_3$
+    será uma série futura conhecida. Trocar `Z_MODE` para `"forecast"` faz as três entradas serem
+    previstas sem alterar a função $g$ nem as células posteriores.
+
+    A série conhecida possui **vintages**: para cada alvo registramos quando seu valor ficou
+    disponível. Isso impede que o plano conhecido hoje seja usado retrospectivamente em uma origem
+    na qual ele ainda não existia.
     """),
     code(r"""
     rng = np.random.default_rng(1501)
-    n_history, horizon = 54, 6
+    n_history, horizon = 58, 6
     full_index = pd.date_range("2024-01-01", periods=n_history + horizon, freq="D", tz="UTC")
-    innovations = rng.multivariate_normal(
-        mean=[0.0, 0.0], cov=[[1.0, 0.70], [0.70, 1.0]], size=n_history
-    )
-    drivers = np.zeros((n_history, 2))
+    innovation_covariance = np.array([
+        [1.00,  0.65,  0.35],
+        [0.65,  1.00, -0.25],
+        [0.35, -0.25,  1.00],
+    ])
+    innovations = rng.multivariate_normal(np.zeros(3), innovation_covariance, size=n_history)
+    drivers = np.zeros((n_history, 3))
+    intercepts = np.array([0.12, -0.05, 0.08])
+    persistence = np.array([0.62, 0.48, 0.55])
     for t in range(1, n_history):
-        drivers[t, 0] = 0.15 + 0.62 * drivers[t - 1, 0] + innovations[t, 0]
-        drivers[t, 1] = -0.05 + 0.48 * drivers[t - 1, 1] + innovations[t, 1]
+        drivers[t] = intercepts + persistence * drivers[t - 1] + innovations[t]
 
-    driver_a = pd.Series(drivers[:, 0], index=full_index[:n_history], name="driver_a")
-    driver_b = pd.Series(drivers[:, 1], index=full_index[:n_history], name="driver_b")
-    known_scale = pd.Series(
-        1.0 + 0.002 * np.arange(len(full_index)), index=full_index, name="known_scale"
+    driver_x = pd.Series(drivers[:, 0], index=full_index[:n_history], name="driver_x")
+    driver_y = pd.Series(drivers[:, 1], index=full_index[:n_history], name="driver_y")
+    driver_z = pd.Series(drivers[:, 2], index=full_index[:n_history], name="input_z")
+
+    known_z = pd.Series(
+        1.20 + 0.003 * np.arange(len(full_index))
+        + 0.05 * np.sin(np.arange(len(full_index)) / 5),
+        index=full_index,
+        name="input_z",
     )
-
-    # Cada alvo já era conhecido um período antes. Esse é o contrato causal de vintages.
-    known_vintages = pd.DataFrame({
+    known_z_vintages = pd.DataFrame({
         "as_of": full_index - pd.Timedelta(days=1),
         "target": full_index,
-        "value": known_scale.to_numpy(),
+        "value": known_z.to_numpy(),
     })
-    pd.concat([driver_a, driver_b], axis=1).head()
+
+    Z_MODE = "known"  # altere para "forecast" para modelar também X3
+    if Z_MODE not in {"known", "forecast"}:
+        raise ValueError("Z_MODE deve ser 'known' ou 'forecast'")
+    pd.concat([driver_x, driver_y, driver_z], axis=1).head()
     """),
     code(r"""
-    ax = pd.concat([driver_a, driver_b], axis=1).plot(figsize=(12, 4), lw=1.2)
-    ax.set(title="Drivers correlacionados", xlabel="tempo", ylabel="valor")
+    ax = pd.concat([driver_x, driver_y, driver_z], axis=1).plot(figsize=(12, 4), lw=1.1)
+    ax.set(title="Históricos disponíveis para as três entradas", xlabel="tempo")
     plt.show()
     """),
     md(r"""
-    ## 3. Um único objeto para folhas e expressões
+    ## 3. Distribuições marginais versus distribuição conjunta
 
-    `mode="forecast"` registra a série e informa que o motor deve modelá-la. `known` representa
-    uma trajetória futura determinística, enquanto `constant` difunde um escalar pelo horizonte.
-    Os operadores devolvem outro `ForecastVariable`; não é necessário criar classes distintas para
-    soma, produto ou nó hierárquico.
+    Um forecast marginal responde, por exemplo,
+
+    $$F_{1,h}(x)=P(X_{1,t+h}\le x\mid\mathcal F_t).$$
+
+    Conhecer separadamente $F_1$, $F_2$ e $F_3$ não determina como as entradas variam juntas. Duas
+    combinações podem ter as mesmas marginais e correlações muito diferentes. Para calcular uma
+    função não linear precisamos de uma aproximação da distribuição conjunta
+
+    $$F_{1,2,3}(x_1,x_2,x_3).$$
+
+    O motor preserva cada forecast marginal e aprende a associação entre eles com erros
+    rolling-origin sincronizados. Uma entrada conhecida entra como caminho repetido e não participa
+    da matriz de dependência residual.
+    """),
+    md(r"""
+    ## 4. Declare as variáveis e a função $g$
+
+    A função abaixo é intencionalmente genérica:
+
+    $$g(x_1,x_2,x_3)=x_1x_2+x_3.$$
+
+    Ela contém um produto para tornar o efeito da covariância visível. Na aplicação real,
+    `generic-g` pode ser substituído por um nome opaco e a função pode permanecer no código privado.
+    O motor persiste somente nome, versão e hash da expressão.
     """),
     code(r"""
     repository = MemoryRepository()
     engine = ForecastEngine(repository=repository)
 
-    a = engine.variable("driver_a", driver_a, mode="forecast")
-    b = engine.variable("driver_b", driver_b, mode="forecast")
-    scale = engine.variable(
-        "known_scale", known_scale, mode="known", vintages=known_vintages
-    )
-    baseline = engine.variable("baseline", 1.0, mode="constant")
+    x1 = engine.variable("driver_x", driver_x, mode="forecast")
+    x2 = engine.variable("driver_y", driver_y, mode="forecast")
+    if Z_MODE == "known":
+        x3 = engine.variable(
+            "input_z", known_z, mode="known", vintages=known_z_vintages
+        )
+    else:
+        x3 = engine.variable("input_z", driver_z, mode="forecast")
 
-    leaf_1 = scale * a
-    leaf_2 = b + baseline
-    leaf_3 = 0.50 * a - 0.25 * b
-    group = leaf_1 + leaf_2
-    total = group + leaf_3
-    interaction = a * b
+    def g_values(x1_values: np.ndarray, x2_values: np.ndarray,
+                 x3_values: np.ndarray) -> np.ndarray:
+        '''Aplica g caminho a caminho; todas as entradas têm forma (M, H).'''
+        return x1_values * x2_values + x3_values
 
-    outputs = {
-        "leaf/1": leaf_1,
-        "leaf/2": leaf_2,
-        "leaf/3": leaf_3,
-        "group": group,
-        "total": total,
-        "interaction": interaction,
-    }
-    pd.Series({name: node.expression_id for name, node in outputs.items()}, name="expression_id")
+    result_y = engine.transform("generic-g", g_values, x1, x2, x3, version="v1")
+    outputs = {"result_y": result_y}
+    result_y.to_payload()
     """),
     md(r"""
-    ## 4. Formulação matemática
+    ## 5. Por que $g(E[X_1],E[X_2],E[X_3])$ não basta
 
-    Para uma função $g$ de entradas aleatórias $mathbf X$,
+    Para esta função,
 
-    $$Y=g(\mathbf X),\qquad
-      E[Y]=\int g(\mathbf x)p(\mathbf x)\,d\mathbf x
-      \approx \frac1M\sum_{m=1}^M g(\mathbf X^{(m)}).$$
+    $$E[Y]=E[X_1X_2]+E[X_3]
+          =E[X_1]E[X_2]+\operatorname{Cov}(X_1,X_2)+E[X_3].$$
 
-    Em geral, não podemos aplicar a função apenas às médias. Para um produto,
-
-    $$E[XY]=E[X]E[Y]+\operatorname{Cov}(X,Y).$$
-
-    Portanto, multiplicar os forecasts pontuais descartaria justamente o termo que mede como os
-    drivers variam juntos. O grafo resolve isso aplicando a operação a cada trajetória conjunta e
-    resumindo a distribuição somente depois.
+    Aplicar $g$ somente às médias elimina o termo de covariância. Para funções mais gerais — razão,
+    máximo, mínimo, `clip`, exponencial ou condicionais — nem sequer existe uma correção simples.
+    A solução uniforme é avaliar $g$ nas amostras conjuntas.
     """),
     md(r"""
-    ## 5. Seleção em duas etapas
+    ## 6. Selecione os modelos pela distribuição de `result_y`
 
-    Primeiro, a `CandidatePolicy` mantém poucos modelos plausíveis por driver. Depois, o motor
-    avalia combinações desses modelos pelo CRPS normalizado das **saídas**. Isso permite que um
-    modelo marginalmente segundo colocado vença quando produz uma distribuição derivada melhor.
+    A seleção tem duas etapas reais neste exemplo:
 
-    O backtest usa somente origens comuns. A série conhecida é recuperada pelo último vintage com
-    `as_of <= cutoff`; usar o plano atual retrospectivamente seria vazamento de informação.
+    1. cada entrada prevista retém seus dois melhores candidatos marginais;
+    2. até quatro combinações são avaliadas pelo CRPS de `result_y`.
+
+    Assim podemos observar se uma combinação que não contém todos os campeões marginais produz uma
+    distribuição derivada melhor. Como há apenas uma saída, não existe ambiguidade sobre pesos de
+    folhas, grupos ou total.
     """),
     code(r"""
     candidate_policy = CandidatePolicy(
@@ -165,54 +211,123 @@ CELLS = [
         simulation_paths=120,
     )
     composition_policy = CompositionPolicy(
-        preselect_top_k=1,
-        max_combinations=1,
+        preselect_top_k=2,
+        max_combinations=4,
         dependency="residual_copula",
-        min_paired_errors=3,
-        n_backtest_paths=150,
-        coverage_range=None,  # amostra didática curta; ainda exibiremos a cobertura
+        min_paired_errors=3,  # didático; use o padrão mais conservador em produção
+        n_backtest_paths=160,
+        coverage_range=None,
     )
     training = engine.backtest_expression(
         outputs,
-        backtest=BacktestConfig(initial_train_size=32, horizon=1, step=6, seed=1501),
+        backtest=BacktestConfig(initial_train_size=34, horizon=1, step=6, seed=1501),
         candidate_policy=candidate_policy,
         policy=composition_policy,
-        promote_as="composition-champion",
+        promote_as="generic-result-champion",
     )
-    pd.Series(training.metrics, name="seleção composta").to_frame()
-    """),
-    code(r"""
     score_table = pd.DataFrame([
         {
-            "combination_id": score["combination_id"],
-            "CRPS normalizado": score["aggregate_normalized_crps"],
-            "cobertura": score["aggregate_coverage"],
+            "combinação": score["combination_id"],
+            "CRPS normalizado de Y": score["aggregate_normalized_crps"],
+            "cobertura de Y": score["aggregate_coverage"],
             **{f"modelo {name}": spec for name, spec in score["specifications"].items()},
         }
         for score in training.scores
-    ])
+    ]).sort_values("CRPS normalizado de Y")
     score_table
     """),
+    code(r"""
+    pd.DataFrame([
+        {"entrada": name, "modelo selecionado": repr(spec),
+         "model_run_id": training.selected_model_runs[name]}
+        for name, spec in training.selected_specs.items()
+    ])
+    """),
     md(r"""
-    ## 6. Dependência explicável
+    ## 7. `CompositionRun`: o manifesto congelado
 
-    Para cada driver e origem calculamos o PIT do realizado na distribuição prevista e o levamos
-    à escala normal:
-
-    $$z_{i,t}=\Phi^{-1}\!\left(\widehat F_{i,t}(y_{i,t})\right).$$
-
-    A correlação desses erros sincronizados recebe shrinkage para a identidade. Se houver poucos
-    pares, o fallback é independência e o motivo fica no artefato. A reordenação por ranks preserva
-    cada conjunto de caminhos marginais e induz a dependência entre seus graus de severidade.
+    `backtest_expression()` devolve um `CompositionRun`, não o forecast. Ele congela quais
+    `ModelRun` serão usados por entrada, suas revisões, os hashes do grafo e o
+    `DependencyDiagnostics`. A partir daqui não haverá novo treinamento implícito.
     """),
     code(r"""
-    dependency = training.dependency
+    N_PATHS = 2_000
+    COMPOSE_SEED = 1502
+    assert isinstance(training, CompositionRun)
+    base_series = engine.get_series("driver_x")
+    offset = pd.tseries.frequencies.to_offset(base_series.frequency)
+    targets = pd.date_range(
+        base_series.cutoff + offset, periods=horizon, freq=base_series.frequency
+    )
+    pd.Series({
+        "composition_run_id": training.composition_run_id,
+        "causal": training.causal,
+        "expressão result_y": training.expression_ids["result_y"],
+        "entradas previstas": tuple(training.selected_model_runs),
+        "targets": tuple(targets),
+    }, name="CompositionRun").to_frame()
+    """),
+    md(r"""
+    ## 8. Passo 1 — Gere os caminhos marginais
+
+    Para cada variável `forecast`, o adaptador selecionado produz uma distribuição com dependência
+    temporal própria. `sample(M)` gera uma matriz
+
+    $$\mathbf X_i\in\mathbb R^{M\times H}.$$
+
+    Neste ponto as matrizes foram amostradas separadamente: cada uma possui a marginal correta, mas
+    os números de linha ainda não têm significado conjunto entre variáveis.
+    """),
+    code(r"""
+    forecast_names = training.dependency.variable_names
+    raw_paths = {}
+    marginal_rows = []
+    for variable_number, name in enumerate(forecast_names):
+        model_run: ModelRun = repository.get_model_run(training.selected_model_runs[name])
+        adapter: ModelAdapter = engine.models.get(model_run.spec.family)
+        variable_seed = COMPOSE_SEED + variable_number * 10_000
+        distribution: PredictiveDistribution = adapter.forecast(
+            model_run, horizon, seed=variable_seed
+        )
+        paths = distribution.sample(N_PATHS, seed=variable_seed + 1)
+        raw_paths[name] = paths
+        quantiles = np.quantile(paths, [0.05, 0.50, 0.95], axis=0)
+        for step in range(horizon):
+            marginal_rows.append({
+                "entrada": name,
+                "horizonte": step + 1,
+                "média": paths[:, step].mean(),
+                "p05": quantiles[0, step],
+                "mediana": quantiles[1, step],
+                "p95": quantiles[2, step],
+            })
+    pd.DataFrame(marginal_rows).head(12).round(3)
+    """),
+    md(r"""
+    ## 9. Passo 2 — Estime a dependência com erros de forecast
+
+    Para cada origem rolling-origin e variável prevista, o motor calcula
+
+    $$u_{i,t}=\widehat F_{i,t}(x_{i,t}),\qquad
+      z_{i,t}=\Phi^{-1}(u_{i,t}).$$
+
+    Se o modelo marginal estiver calibrado, $u_{i,t}$ está aproximadamente em $(0,1)$ e
+    $z_{i,t}$ fica em escala normal. A correlação dos $z$ sincronizados mede o que os modelos erram
+    juntos. Ela recebe shrinkage para a identidade e reparo numérico para permanecer semidefinida
+    positiva.
+
+    Com poucos pares, o motor usa independência e registra o fallback; não interpreta ausência de
+    evidência como prova de independência.
+    """),
+    code(r"""
+    dependency: DependencyDiagnostics = training.dependency
     display(pd.Series({
-        "erros emparelhados": dependency.paired_errors,
+        "variáveis previstas": dependency.variable_names,
+        "erros PIT emparelhados": dependency.paired_errors,
         "shrinkage": dependency.shrinkage,
         "fallback": dependency.fallback,
         "motivo": dependency.reason,
-    }, name="dependência").to_frame())
+    }, name="diagnóstico").to_frame())
     pd.DataFrame(
         dependency.correlation,
         index=dependency.variable_names,
@@ -220,151 +335,315 @@ CELLS = [
     ).round(3)
     """),
     md(r"""
-    ## 7. Forecast conjunto e coerência da árvore
+    ## 10. Passo 3 — Associe linhas com uma cópula por ranks
 
-    `compose()` não treina nada implicitamente. Ele exige o `CompositionRun` ou alias congelado,
-    confere os hashes das expressões e as revisões das entradas, gera caminhos marginais, aplica a
-    dependência e só então percorre o grafo.
+    O motor não altera os valores marginais. Ele sorteia vetores gaussianos correlacionados,
+    resume a severidade de cada caminho completo, ordena os caminhos marginais e associa seus ranks
+    aos ranks gaussianos. Reordenar linhas preserva cada caminho e sua dependência temporal; muda
+    apenas qual caminho de $X_1$ fica na mesma linha de qual caminho de $X_2$.
+    """),
+    code(r"""
+    def align_paths_by_rank(
+        paths_by_name: dict[str, np.ndarray],
+        names: tuple[str, ...],
+        correlation: np.ndarray,
+        *,
+        seed: int,
+    ) -> dict[str, np.ndarray]:
+        '''Versão explícita da reordenação usada pelo motor.'''
+        n_paths = paths_by_name[names[0]].shape[0]
+        latent = np.random.default_rng(seed).multivariate_normal(
+            np.zeros(len(names)), correlation, size=n_paths
+        )
+        aligned = dict(paths_by_name)
+        for column, name in enumerate(names):
+            original = paths_by_name[name]
+            scale = np.std(original, axis=0, ddof=1)
+            scale = np.where(scale > 1e-12, scale, 1.0)
+            severity = np.mean(
+                (original - np.mean(original, axis=0)) / scale, axis=1
+            )
+            sorted_paths = original[np.argsort(severity)]
+            latent_order = np.argsort(latent[:, column])
+            reordered = np.empty_like(original)
+            reordered[latent_order] = sorted_paths
+            aligned[name] = reordered
+        return aligned
+
+    explicit_joint_paths = align_paths_by_rank(
+        raw_paths,
+        forecast_names,
+        dependency.correlation,
+        seed=COMPOSE_SEED + 99,
+    )
+    joint_paths, realized_dependency = impose_rank_dependence(
+        raw_paths, dependency, seed=COMPOSE_SEED + 99
+    )
+    for name in forecast_names:
+        np.testing.assert_array_equal(explicit_joint_paths[name], joint_paths[name])
+    pd.DataFrame({
+        "correlação antes": [
+            np.corrcoef(raw_paths[forecast_names[0]][:, 0],
+                        raw_paths[forecast_names[1]][:, 0])[0, 1]
+        ],
+        "correlação depois": [
+            np.corrcoef(joint_paths[forecast_names[0]][:, 0],
+                        joint_paths[forecast_names[1]][:, 0])[0, 1]
+        ],
+    }).round(3)
+    """),
+    md(r"""
+    ## 11. Passo 4 — Transforme valores dados em caminhos
+
+    Quando $X_3$ é conhecido, seu vetor futuro $[x_{3,1},\ldots,x_{3,H}]$ é difundido pelas
+    $M$ linhas. A variância entre caminhos é zero. Se `Z_MODE="forecast"`, $X_3$ já estará em
+    `joint_paths` e participará da cópula exatamente como as demais variáveis previstas.
+    """),
+    code(r"""
+    graph_leaves = collect_leaves(outputs)
+    leaf_values = materialize_leaves(
+        graph_leaves,
+        joint_paths,
+        targets,
+        n_paths=N_PATHS,
+        scenario=None,
+    )
+    x3_paths = leaf_values[graph_leaves["input_z"].expression_id]
+
+    assert x3_paths.shape == (N_PATHS, horizon)
+    pd.DataFrame({
+        "target": targets,
+        "E[X3]": x3_paths.mean(axis=0),
+        "Var[X3]": x3_paths.var(axis=0, ddof=1),
+    }).round(6)
+    """),
+    md(r"""
+    ## 12. Passo 5 — Aplique $g$ linha a linha
+
+    Agora os índices de linha representam o mesmo cenário conjunto. Para cada caminho $m$ e
+    horizonte $h$:
+
+    $$Y_h^{(m)}=g\!\left(X_{1,h}^{(m)},X_{2,h}^{(m)},X_{3,h}^{(m)}\right).$$
+
+    As $M$ linhas resultantes são amostras da distribuição futura de $Y$. Nenhuma hipótese
+    gaussiana é necessária para a saída derivada.
+    """),
+    code(r"""
+    manual_y_paths = g_values(
+        joint_paths["driver_x"],
+        joint_paths["driver_y"],
+        x3_paths,
+    )
+    low_level_outputs = evaluate_outputs(outputs, leaf_values)
+    low_level_y_paths = low_level_outputs["result_y"]
+    graph_evaluation_error = float(np.max(np.abs(manual_y_paths - low_level_y_paths)))
+    assert graph_evaluation_error == 0.0
+    print("Erro máximo entre g explícita e evaluate_outputs():", graph_evaluation_error)
+    """),
+    md(r"""
+    ## 13. Da matriz de caminhos à distribuição empírica
+
+    Para cada horizonte $h$:
+
+    $$\widehat E[Y_h]=\frac1M\sum_mY_h^{(m)},$$
+
+    $$\widehat F_h(y)=\frac1M\sum_m\mathbf1\{Y_h^{(m)}\le y\}.$$
+
+    Variância e quantis são calculados pelas colunas. `EmpiricalDistribution` apenas organiza essas
+    operações sobre a mesma matriz que acabamos de construir.
+    """),
+    code(r"""
+    manual_distribution = EmpiricalDistribution(manual_y_paths)
+    manual_quantiles = np.quantile(manual_y_paths, [0.05, 0.50, 0.95], axis=0)
+    cdf_threshold = float(np.median(manual_y_paths[:, -1]))
+    manual_cdf = np.mean(manual_y_paths <= cdf_threshold, axis=0)
+
+    distribution_summary = pd.DataFrame({
+        "target": targets,
+        "média": manual_y_paths.mean(axis=0),
+        "variância": manual_y_paths.var(axis=0, ddof=1),
+        "p05": manual_quantiles[0],
+        "mediana": manual_quantiles[1],
+        "p95": manual_quantiles[2],
+        f"P(Y <= {cdf_threshold:.2f})": manual_cdf,
+    })
+    np.testing.assert_allclose(manual_distribution.mean, distribution_summary["média"])
+    np.testing.assert_allclose(
+        manual_distribution.quantile([0.05, 0.50, 0.95]), manual_quantiles
+    )
+    distribution_summary.round(3)
+    """),
+    md(r"""
+    ## 14. Agora use a fachada `compose()`
+
+    Já construímos a distribuição usando `ModelRun`, `ModelAdapter`, `PredictiveDistribution`,
+    `DependencyDiagnostics`, matrizes de caminhos, materialização de folhas, avaliação do grafo e
+    `EmpiricalDistribution`. A fachada deve apenas coordenar esses mesmos passos e persistir o
+    `ComposedForecast`.
     """),
     code(r"""
     forecast = engine.compose(
         outputs,
-        model_ref="composition-champion",
+        model_ref="generic-result-champion",
         horizon=horizon,
-        n_paths=2_000,
-        seed=1502,
+        n_paths=N_PATHS,
+        seed=COMPOSE_SEED,
     )
-    summary = pd.DataFrame({
-        (name, "média"): distribution.mean
-        for name, distribution in forecast.distributions.items()
-    }, index=forecast.targets)
-    summary.round(3)
+    engine_y_paths = forecast.paths["result_y"]
+    reconstruction_error = float(np.max(np.abs(manual_y_paths - engine_y_paths)))
+    assert reconstruction_error == 0.0
+    distribution_y = forecast.distributions["result_y"]
+    assert isinstance(distribution_y, EmpiricalDistribution)
+    print("Erro máximo entre baixo nível e compose():", reconstruction_error)
     """),
     code(r"""
-    fig, ax = plt.subplots(figsize=(12, 5))
-    for name, color in [("leaf/1", COLORS["blue"]), ("group", COLORS["orange"]),
-                        ("total", COLORS["purple"])]:
-        distribution = forecast.distributions[name]
-        bounds = distribution.quantile([0.05, 0.95])
-        ax.plot(forecast.targets, distribution.mean, marker="o", label=name, color=color)
-        ax.fill_between(forecast.targets, bounds[0], bounds[1], color=color, alpha=.12)
-    ax.set(title="Distribuições derivadas sobre os mesmos caminhos", xlabel="alvo")
-    ax.legend(); plt.show()
-    """),
-    code(r"""
-    group_error = np.max(np.abs(
-        forecast.paths["group"] - (forecast.paths["leaf/1"] + forecast.paths["leaf/2"])
-    ))
-    total_error = np.max(np.abs(
-        forecast.paths["total"] - (forecast.paths["group"] + forecast.paths["leaf/3"])
-    ))
-    assert group_error == 0.0 and total_error == 0.0
-    pd.Series({"erro máximo do grupo": group_error, "erro máximo do total": total_error})
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4.5))
+    axes[0].scatter(
+        joint_paths["driver_x"][:, -1], joint_paths["driver_y"][:, -1],
+        c=manual_y_paths[:, -1], cmap="viridis", s=10, alpha=.45,
+    )
+    axes[0].set(title="Cenários conjuntos no último horizonte",
+                xlabel="X1", ylabel="X2")
+    axes[1].hist(manual_y_paths[:, -1], bins=35, density=True,
+                 color=COLORS["purple"], alpha=.75)
+    axes[1].axvline(manual_y_paths[:, -1].mean(), color="black", ls="--", label="média")
+    axes[1].set(title="Distribuição resultante de Y", xlabel="Y")
+    axes[1].legend(); plt.tight_layout(); plt.show()
     """),
     md(r"""
-    ## 8. O termo de covariância aparece nos caminhos
+    ## 15. Onde aparece a covariância
 
-    A saída `interaction` foi definida como produto dos dois drivers. A diferença abaixo não é um
-    ajuste colocado manualmente: ela surge da dependência das amostras conjuntas.
+    Podemos conferir numericamente:
+
+    $$E[X_1X_2]-E[X_1]E[X_2]=\operatorname{Cov}(X_1,X_2).$$
     """),
     code(r"""
-    mean_product = forecast.distributions["interaction"].mean
-    product_of_means = (
-        np.mean(forecast.paths["leaf/3"] * 0 + forecast.paths["leaf/1"] / known_scale.loc[forecast.targets].to_numpy(), axis=0)
-        * np.mean(forecast.paths["leaf/2"] - 1.0, axis=0)
+    x1_paths = joint_paths["driver_x"]
+    x2_paths = joint_paths["driver_y"]
+    covariance = np.array([
+        np.cov(x1_paths[:, step], x2_paths[:, step], ddof=1)[0, 1]
+        for step in range(horizon)
+    ])
+    product_correction = (
+        np.mean(x1_paths * x2_paths, axis=0)
+        - np.mean(x1_paths, axis=0) * np.mean(x2_paths, axis=0)
     )
-    covariance_effect = mean_product - product_of_means
     pd.DataFrame({
-        "E[A B]": mean_product,
-        "E[A]E[B]": product_of_means,
-        "efeito da covariância": covariance_effect,
-    }, index=forecast.targets).round(3)
+        "target": targets,
+        "Cov(X1,X2)": covariance,
+        "E[X1X2]-E[X1]E[X2]": product_correction,
+        "diferença Monte Carlo": product_correction - covariance,
+    }).round(5)
     """),
     md(r"""
-    ## 9. Funções privadas
+    ## 16. O que mudaria se assumíssemos independência?
 
-    Quando os operadores não bastarem, `transform()` recebe uma função vetorizada. O código fica
-    na aplicação privada; o motor persiste somente nome opaco, versão e hash. Alterar a função sem
-    alterar a versão quebraria a reprodutibilidade e é responsabilidade explícita da aplicação.
+    `raw_paths` preserva as marginais, mas suas linhas foram sorteadas separadamente. Aplicar $g$
+    antes da associação equivale aproximadamente a assumir independência. A comparação isola o
+    efeito da dependência sem trocar nenhum modelo marginal.
     """),
     code(r"""
-    def tutorial_transform(values: np.ndarray) -> np.ndarray:
-        return np.maximum(values, 0.0)
-
-    nonnegative_total = engine.transform(
-        "opaque-example", tutorial_transform, total, version="v1"
+    independent_x3 = x3_paths if Z_MODE == "known" else raw_paths["input_z"]
+    independent_y_paths = g_values(
+        raw_paths["driver_x"], raw_paths["driver_y"], independent_x3
     )
-    safe_payload = nonnegative_total.to_payload()
-    assert "function" not in safe_payload and "operator" not in safe_payload
-    safe_payload
+    pd.DataFrame({
+        "target": targets,
+        "média conjunta": manual_y_paths.mean(axis=0),
+        "média independente": independent_y_paths.mean(axis=0),
+        "desvio conjunto": manual_y_paths.std(axis=0, ddof=1),
+        "desvio independente": independent_y_paths.std(axis=0, ddof=1),
+    }).round(3)
     """),
     md(r"""
-    ## 10. Risco sobre qualquer nó
+    ## 17. Risco é calculado sobre a distribuição de $Y$
 
-    Como cada saída é uma `EmpiricalDistribution`, a mesma API calcula risco marginal, risco em
-    qualquer horizonte e primeira passagem. A probabilidade de exceder em algum passo não é a soma
-    das probabilidades marginais porque os horizontes pertencem à mesma trajetória.
+    Depois da composição, `result_y` possui o mesmo contrato de qualquer distribuição preditiva.
+    Podemos calcular probabilidades marginais, ocorrência em qualquer horizonte e primeira passagem
+    sem voltar às variáveis de entrada.
     """),
     code(r"""
-    limit = float(np.quantile(forecast.distributions["total"].paths, 0.80))
+    limit = float(np.quantile(manual_y_paths, 0.82))
     risk = engine.assess_risk(
-        forecast.distributions["total"],
+        distribution_y,
         ThresholdRisk(limit=limit, n_paths=2_000, seed=1503),
     )
     pd.DataFrame({
-        "probabilidade marginal": risk.marginal_probability,
+        "target": targets,
+        "P(Y > limite)": risk.marginal_probability,
         "primeira passagem": risk.first_passage_probability,
-    }, index=forecast.targets).assign(
-        probabilidade_em_algum_horizonte=risk.any_horizon_probability
+    }).assign(
+        limite=limit,
+        probabilidade_em_algum_horizonte=risk.any_horizon_probability,
     ).round(3)
     """),
     md(r"""
-    ## 11. Limitações e armadilhas
+    ## 18. De uma saída para folhas e grupos
 
-    - Correlação de níveis não substitui dependência dos erros de forecast.
-    - Sem vintages, uma série futura conhecida pode vazar o plano atual para o passado; a promoção
-      é bloqueada por padrão.
-    - O fallback independente não significa que independência foi demonstrada: significa que não
-      houve evidência emparelhada suficiente para estimá-la.
-    - A cópula coordena ranks de caminhos; não cria um modelo estrutural multivariado.
-    - Os agregados são coerentes por construção, mas ainda não influenciam as médias das folhas.
-    - Monitoramento composto e reconciliação estatística pertencem à próxima fase.
+    Uma árvore não introduz outra mecânica probabilística. Ela apenas avalia várias funções sobre as
+    mesmas entradas e caminhos:
+
+    ```python
+    folha_a = g_a(x1, x2, x3)
+    folha_b = g_b(x1, x2, x3)
+    grupo = folha_a + folha_b
+    total = grupo_a + grupo_b
+    ```
+
+    Como as somas são aplicadas caminho a caminho, a coerência é automática. O Notebook 16 recebe
+    `dict[str, list[pd.Series]]` e operacionaliza essa extensão.
     """),
     md(r"""
-    ## 12. Exercícios
+    ## 19. Limitações e armadilhas
 
-    1. Troque `dependency` para `"independent"` e compare o intervalo do total.
-    2. Remova `known_vintages` e confirme que o backtest causal falha antes da seleção.
-    3. Aumente `preselect_top_k` para 2 e observe quantas combinações entram no placar.
-    4. Altere a correlação das inovações para $-0{,}70$ e examine `interaction` e o total.
-    5. Crie uma quarta folha e prove caminho a caminho que o novo total fecha exatamente.
+    - O exemplo usa poucos erros emparelhados; a correlação é didática, não produtiva.
+    - A cópula por ranks preserva marginais e caminhos, mas não é um modelo estrutural multivariado.
+    - Correlação dos níveis não deve substituir dependência dos erros rolling-origin.
+    - Uma variável `known` sem vintages torna o backtest retrospectivo não causal.
+    - Alterar uma função privada exige alterar sua versão; o motor não persiste seu código.
+    - Mais caminhos reduzem erro Monte Carlo, mas não corrigem modelos marginais ruins.
+    - Validar as entradas não valida automaticamente `result_y`.
+    """),
+    md(r"""
+    ## 20. Exercícios
+
+    1. Troque `Z_MODE` para `"forecast"` e observe a matriz passar de 2×2 para 3×3.
+    2. Substitua $g$ por `x1 / np.maximum(np.abs(x2), 0.2) + x3`.
+    3. Troque `dependency` para `"independent"` e compare média, desvio e risco.
+    4. Reduza `N_PATHS` para 100 e repita com seeds diferentes.
+    5. Compare o vencedor composto com os campeões marginais.
+    6. Transforme $X_3$ em escalar com `mode="constant"`.
 
     <details><summary><strong>Gabarito orientativo</strong></summary>
 
-    1. A média pode mudar pouco, mas a dispersão do total deve mudar.
-    2. O erro seguro contém “exige vintages”; `allow_noncausal_known=True` serve apenas para análise
-       marcada como não causal e não pode ser promovida.
-    3. Com dois drivers, o limite superior é $2^2=4$, respeitando `max_combinations`.
-    4. $E[AB]-E[A]E[B]$ deve mudar de sinal em média.
-    5. Some as matrizes das folhas e use `np.testing.assert_allclose` contra o total.
+    1. $X_3$ passa a ter incerteza própria e participa do alinhamento conjunto.
+    2. A razão pode produzir caudas longas; quantis e CRPS são essenciais.
+    3. As marginais permanecem iguais; somente a associação entre linhas muda.
+    4. As estimativas oscilam mais com uma amostra menor.
+    5. O menor CRPS de `result_y` pode usar um modelo marginal em segundo lugar.
+    6. O escalar é repetido em todas as linhas e horizontes, com variância zero.
 
     </details>
     """),
     code(r"""
-    # Testes rápidos: invariantes essenciais do capítulo.
+    # Testes rápidos: o tutorial reproduziu exatamente a mecânica do motor.
     assert training.causal
-    assert repository.get_composition_alias("composition-champion") == training.composition_run_id
-    assert forecast.paths["total"].shape == (2_000, horizon)
-    assert set(forecast.distributions) == set(outputs)
-    assert np.all(np.isfinite(forecast.paths["total"]))
+    assert len(training.scores) >= 2
+    assert reconstruction_error == 0.0
+    assert manual_y_paths.shape == (N_PATHS, horizon)
+    assert np.all(np.isfinite(manual_y_paths))
+    assert repository.get_composition_alias("generic-result-champion") == training.composition_run_id
+    if Z_MODE == "known":
+        assert np.allclose(x3_paths.var(axis=0), 0.0)
     print("Testes rápidos do Notebook 15 passaram.")
     """),
     md(r"""
     ## Conclusão
 
-    O motor continuou ajustando modelos univariados transparentes, mas deixou de tratar suas
-    saídas como isoladas. Dependência foi estimada com evidência causal, fórmulas foram avaliadas
-    sobre caminhos e a hierarquia fechou exatamente sem expor regras privadas nos artefatos.
+    A distribuição de $Y=g(X_1,X_2,X_3)$ surgiu de uma sequência concreta: previsões marginais,
+    dependência estimada fora da amostra, associação de caminhos, broadcast de valores conhecidos,
+    aplicação vetorizada de $g$ e resumo empírico. A hierarquia do Notebook 16 reutiliza exatamente
+    essa mecânica em várias folhas.
 
     **Próximo passo:** o [Notebook 16](16_ciclo_hierarquico_dict.ipynb) recebe um
     `dict[str, list[pd.Series]]` e constrói automaticamente folhas, grupos e total.
@@ -374,4 +653,3 @@ CELLS = [
 
 if __name__ == "__main__":
     write_notebook(PATH, CELLS, 15)
-

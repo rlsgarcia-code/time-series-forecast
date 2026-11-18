@@ -1,25 +1,29 @@
-# Plano — Notebook 15: composição probabilística e hierárquica
+# Plano — Notebook 15: distribuição de $Y=g(X_1,X_2,X_3)$
 
 ## Objetivo
 
-Ensinar como combinar forecasts univariados, séries conhecidas e constantes em um grafo pequeno,
-selecionar modelos pelo resultado derivado e produzir folhas, grupos e total coerentes caminho a
-caminho, sem persistir fórmulas privadas.
+Explicar detalhadamente como forecasts marginais e entradas conhecidas são convertidos em caminhos
+conjuntos e, depois, na distribuição empírica de uma única saída $Y=g(X_1,X_2,X_3)$. A hierarquia
+aparece somente como extensão e é operacionalizada no Notebook 16.
 
 ## Decisões didáticas e técnicas
 
-- O exemplo sintético usa dois drivers correlacionados e uma série conhecida com vintages.
-- A formulação explicita Monte Carlo para $E[g(X)]$ e o termo de covariância de $E[XY]$.
-- O backtest mostra pré-seleção marginal e seleção final por CRPS normalizado das saídas.
-- A dependência é explicada por PIT, shrinkage, fallback e reordenação por ranks.
-- Três folhas formam grupo e total sobre as mesmas trajetórias, com teste de igualdade exata.
-- A função privada demonstra persistência por nome/versão/hash, sem revelar código.
-- Risco, limitações, exercícios e gabarito completam o ciclo tutorial.
+- O exemplo possui três entradas e permite alternar $X_3$ entre `known` e `forecast`.
+- A função genérica $g(x_1,x_2,x_3)=x_1x_2+x_3$ torna explícito o termo de covariância.
+- Duas etapas de seleção avaliam até quatro combinações pelo CRPS da saída derivada.
+- A mecânica é construída primeiro com objetos de baixo nível: `ModelRun`, `ModelAdapter`,
+  `PredictiveDistribution`, `DependencyDiagnostics`, folhas materializadas, avaliação do grafo e
+  `EmpiricalDistribution`.
+- A implementação explícita reconstrói as mesmas matrizes de `compose()` com seeds idênticas.
+- Média, variância, quantis e CDF são calculados diretamente da matriz de caminhos.
+- Dependência residual e independência são comparadas sem trocar os modelos marginais.
+- A fachada `ForecastEngine.compose()` aparece somente depois da reconstrução de baixo nível.
 
 ## Critérios de conclusão
 
 - Executar integralmente em kernel limpo e sem dados externos.
-- Demonstrar vintages sem vazamento, dependência e efeito de covariância.
-- Exibir métricas da composição, modelos selecionados e diagnóstico da cópula.
-- Provar coerência da árvore caminho a caminho.
-- Integrar o notebook ao gerador, `Makefile` e testes estruturais.
+- Produzir ao menos duas combinações candidatas para `result_y`.
+- Reproduzir exatamente os caminhos do motor usando objetos e funções de baixo nível.
+- Demonstrar o caso de entrada conhecida com variância zero e indicar como torná-la forecast.
+- Verificar numericamente o papel da covariância e construir a CDF empírica da saída.
+- Integrar o conteúdo ao gerador, README e testes estruturais.

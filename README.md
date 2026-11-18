@@ -509,7 +509,7 @@ sistema e seus limites estão em [`docs/system_vision.md`](docs/system_vision.md
 | [12](notebooks/12_cusum_ewma.ipynb) | Detecção sequencial | ARL, falso alarme, atraso, CUSUM e EWMA |
 | [13](notebooks/13_sistema_final.ipynb) | Sistema final | seleção, persistência, monitoramento, risco e API |
 | [14](notebooks/14_ciclo_completo_usuario.ipynb) | Ciclo guiado | uma `pandas.Series` do usuário percorre caracterização, seleção, forecast, risco e monitoramento |
-| [15](notebooks/15_composicao_probabilistica_hierarquica.ipynb) | Composição e hierarquia | grafo probabilístico, dependência residual, vintages, covariância e árvore coerente |
+| [15](notebooks/15_composicao_probabilistica_hierarquica.ipynb) | Composição de variáveis | distribuição de $Y=g(X_1,X_2,X_3)$ com objetos de baixo nível, caminhos conjuntos, covariância e CDF empírica |
 | [16](notebooks/16_ciclo_hierarquico_dict.ipynb) | Dicionário hierárquico | `dict[str, list[pd.Series]]` percorre validação, seleção, grupos, total e risco |
 
 Cada notebook possui plano em `docs/plano_notebook_XX.md`, funções matemáticas explícitas,
