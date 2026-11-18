@@ -1,6 +1,13 @@
 """Ferramentas didáticas para o Time Series Lab."""
 
 from .engine import ForecastEngine
+from .composition import (
+    ComposedForecast,
+    CompositionPolicy,
+    CompositionRun,
+    DependencyDiagnostics,
+    ForecastVariable,
+)
 from .candidate_policy import CandidateDecision, CandidatePlan, CandidatePolicy
 from .contracts import (
     AR1Spec,
@@ -152,11 +159,15 @@ __all__ = [
     "CandidateDecision",
     "CandidatePlan",
     "CandidatePolicy",
+    "ComposedForecast",
+    "CompositionPolicy",
+    "CompositionRun",
     "CycleResult",
     "CusumDetector",
     "CusumResult",
     "Detector",
     "DetectorRegistry",
+    "DependencyDiagnostics",
     "EmpiricalDistribution",
     "EngineCapabilities",
     "EngineConfig",
@@ -172,6 +183,7 @@ __all__ = [
     "ForecastArtifact",
     "ForecastEnvelope",
     "ForecastResult",
+    "ForecastVariable",
     "ForcedRegimeScenario",
     "GARCH11Spec",
     "GARCHFit",

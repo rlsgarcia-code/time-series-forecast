@@ -21,6 +21,7 @@ from time_series_lab.contracts import (
     RepositoryConflictError,
     TimeSeries,
 )
+from time_series_lab.composition import ComposedForecast, CompositionRun
 
 
 class MemoryRepository:
@@ -33,6 +34,9 @@ class MemoryRepository:
         self.monitoring_events: list[MonitoringEvent] = []
         self.cycles: dict[str, CycleResult] = {}
         self.events: list[EngineEvent] = []
+        self.composition_runs: dict[str, CompositionRun] = {}
+        self.composition_aliases: dict[str, str] = {}
+        self.composed_forecasts: dict[str, ComposedForecast] = {}
 
     def add_series(self, series: TimeSeries) -> None:
         if series.series_id in self.series:
@@ -125,6 +129,26 @@ class MemoryRepository:
 
     def list_events(self, series_id: str) -> Sequence[EngineEvent]:
         return tuple(event for event in self.events if event.series_id == series_id)
+
+    def save_composition_run(self, run: CompositionRun) -> None:
+        self.composition_runs.setdefault(run.composition_run_id, run)
+
+    def get_composition_run(self, composition_run_id: str) -> CompositionRun:
+        return self.composition_runs[composition_run_id]
+
+    def set_composition_alias(self, alias: str, composition_run_id: str) -> None:
+        if composition_run_id not in self.composition_runs:
+            raise KeyError(composition_run_id)
+        self.composition_aliases[alias] = composition_run_id
+
+    def get_composition_alias(self, alias: str) -> str | None:
+        return self.composition_aliases.get(alias)
+
+    def save_composed_forecast(self, forecast: ComposedForecast) -> None:
+        self.composed_forecasts.setdefault(forecast.forecast_id, forecast)
+
+    def get_composed_forecast(self, forecast_id: str) -> ComposedForecast:
+        return self.composed_forecasts[forecast_id]
 
 
 __all__ = ["MemoryRepository"]

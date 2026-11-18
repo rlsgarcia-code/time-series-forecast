@@ -80,6 +80,7 @@ risk = engine.assess_risk(simulation, ThresholdRisk(limit=5.0))
 | Diagnóstico | `characterize`, `propose_candidates`, `diagnose`, `plot_characterization`, `plot_residuals`, `detect_changes` | perfil, plano explicável, resíduos, figuras e change-points |
 | Modelagem | `fit`, `backtest`, `select`, `promote`, `run_training_cycle` | modelo, relatório, decisão e promoção auditáveis |
 | Forecast | `forecast`, `get_forecast` | distribuição preditiva preservada |
+| Composição | `variable`, `transform`, `backtest_expression`, `compose`, `get_composition_run`, `get_composed_forecast` | grafo, seleção derivada e árvore probabilística coerente |
 | Simulação e risco | `simulate`, `assess_risk` | trajetórias conjuntas e probabilidades de evento |
 | Monitoramento | `start_monitoring`, `process_observation` | surpresa, CUSUM, EWMA, alerta e próximo forecast |
 | Consulta | `get_champion`, `get_model_run`, `get_status`, `list_events`, `list_alerts` | estado operacional sem mutação |
@@ -249,7 +250,43 @@ operação que troca `champion` explicitamente.
 
 `run_training_cycle()` reúne essas etapas. `PromotionPolicy(automatic=False)` é o padrão.
 
-## 8. Monitoramento causal
+## 8. Composição probabilística e hierárquica
+
+`variable()` cria folhas com modos `forecast`, `known`, `constant` ou `scenario`. Operadores
+aritméticos produzem novos `ForecastVariable`; `transform()` registra uma função privada por nome e
+versão sem serializar seu código.
+
+`backtest_expression()` executa duas etapas: reduz candidatos por entrada e avalia combinações
+limitadas pelo CRPS normalizado das saídas. Séries `known` variáveis no tempo exigem vintages com
+colunas `as_of`, `target`, `value`. Sem vintages, somente uma análise explicitamente não causal é
+permitida, e ela não pode ser promovida. Entradas `scenario` seguem a mesma regra: usam a chave
+`observed` no backtest não causal e uma chave escolhida em `compose(scenario=...)`.
+
+`compose()` exige um `CompositionRun` congelado, confere hashes e revisões, coordena os caminhos
+por uma cópula de erros PIT sincronizados e devolve `ComposedForecast`. Cada saída é uma
+`EmpiricalDistribution`, portanto pode ser passada diretamente a `assess_risk()`.
+
+```python
+run = engine.backtest_expression(
+    {"leaf": leaf, "total": total},
+    backtest=BacktestConfig(initial_train_size=40, horizon=1, step=4),
+    policy=CompositionPolicy(preselect_top_k=2, max_combinations=32),
+    promote_as="composition-champion",
+)
+result = engine.compose(
+    {"leaf": leaf, "total": total},
+    model_ref="composition-champion",
+    horizon=12,
+    n_paths=5_000,
+)
+```
+
+O hash identifica a estrutura em memória, mas o payload persistido contém somente hashes,
+linhagem, revisões, modelos e métricas. Alterar uma função privada exige alterar sua versão.
+O Notebook 16 fornece o adaptador didático completo para `dict[str, list[pd.Series]]`, incluindo
+limpeza causal, construção automática dos grupos e teste de coerência do total.
+
+## 9. Monitoramento causal
 
 `start_monitoring()` preserva o forecast inicial. Depois, cada `process_observation()` executa:
 
@@ -267,7 +304,7 @@ registrada como `observation_unscored` e não alimenta os detectores.
 Alertas e recomendações de retreino são eventos. O motor não envia e-mail, webhook ou comando de
 intervenção.
 
-## 9. Contrato de persistência
+## 10. Contrato de persistência
 
 `EngineRepository` define operações para:
 
@@ -276,12 +313,13 @@ intervenção.
 - forecasts e marcação dos alvos avaliados;
 - sessões/checkpoints de monitoramento;
 - eventos e resultados idempotentes de ciclo.
+- execuções, aliases e forecasts de composição sem a árvore da fórmula privada.
 
 O repositório deve garantir atomicidade por série. Snapshots contêm estruturas versionáveis e
 arrays, sem exigir `pickle`. A implementação pode usar PostgreSQL, object storage, SQLite ou os
 serviços da aplicação, desde que preserve o contrato.
 
-## 10. Extensão
+## 11. Extensão
 
 Um novo modelo implementa `ModelAdapter` e declara `ModelCapabilities`. O adaptador deve ajustar
 uma `TimeSeries`, produzir estado seguro, reconstruir uma distribuição e simular trajetórias.

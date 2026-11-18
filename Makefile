@@ -1,4 +1,4 @@
-.PHONY: install lab test validate validate-01 validate-02 validate-03 validate-04 validate-05 validate-06 validate-07 validate-08 validate-09 validate-10 validate-11 validate-12 validate-13 validate-14 check rebuild-notebook rebuild-notebooks
+.PHONY: install lab test validate validate-01 validate-02 validate-03 validate-04 validate-05 validate-06 validate-07 validate-08 validate-09 validate-10 validate-11 validate-12 validate-13 validate-14 validate-15 validate-16 check rebuild-notebook rebuild-notebooks
 
 install:
 	uv sync
@@ -9,7 +9,7 @@ lab:
 test:
 	uv run pytest
 
-validate: validate-01 validate-02 validate-03 validate-04 validate-05 validate-06 validate-07 validate-08 validate-09 validate-10 validate-11 validate-12 validate-13 validate-14
+validate: validate-01 validate-02 validate-03 validate-04 validate-05 validate-06 validate-07 validate-08 validate-09 validate-10 validate-11 validate-12 validate-13 validate-14 validate-15 validate-16
 
 validate-01:
 	uv run python scripts/validate_notebook.py notebooks/01_processos_estocasticos.ipynb
@@ -53,6 +53,12 @@ validate-13:
 validate-14:
 	uv run python scripts/validate_notebook.py notebooks/14_ciclo_completo_usuario.ipynb
 
+validate-15:
+	uv run python scripts/validate_notebook.py notebooks/15_composicao_probabilistica_hierarquica.ipynb
+
+validate-16:
+	uv run python scripts/validate_notebook.py notebooks/16_ciclo_hierarquico_dict.ipynb
+
 check: test validate
 
 rebuild-notebook: rebuild-notebooks
@@ -72,4 +78,6 @@ rebuild-notebooks:
 	uv run python scripts/build_notebook_12.py
 	uv run python scripts/build_notebook_13.py
 	uv run python scripts/build_notebook_14.py
+	uv run python scripts/build_notebook_15.py
+	uv run python scripts/build_notebook_16.py
 

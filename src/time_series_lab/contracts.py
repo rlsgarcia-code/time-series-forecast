@@ -890,6 +890,7 @@ class EngineCapabilities:
     detector_families: tuple[str, ...] = ("point_anomaly", "cusum", "ewma", "change_point")
     multivariate: bool = False
     asynchronous: bool = False
+    compositional: bool = False
 
 
 @runtime_checkable
@@ -975,6 +976,18 @@ class EngineRepository(Protocol):
     def save_event(self, event: EngineEvent) -> None: ...
 
     def list_events(self, series_id: str) -> Sequence[EngineEvent]: ...
+
+    def save_composition_run(self, run: Any) -> None: ...
+
+    def get_composition_run(self, composition_run_id: str) -> Any: ...
+
+    def set_composition_alias(self, alias: str, composition_run_id: str) -> None: ...
+
+    def get_composition_alias(self, alias: str) -> str | None: ...
+
+    def save_composed_forecast(self, forecast: Any) -> None: ...
+
+    def get_composed_forecast(self, forecast_id: str) -> Any: ...
 
 
 class ModelRegistry:

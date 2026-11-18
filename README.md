@@ -6,7 +6,7 @@ modelos, forecasting probabilístico, simulação, avaliação de risco e monito
 O projeto combina duas entregas:
 
 - uma biblioteca importável, centrada em `ForecastEngine`;
-- 14 notebooks que apresentam a formulação matemática e validam cada componente passo a passo.
+- 16 notebooks que apresentam a formulação matemática e validam cada componente passo a passo.
 
 ## Fluxo completo
 
@@ -40,7 +40,8 @@ amostra.
 
 ## 1. Contrato de entrada
 
-O motor trabalha atualmente com séries univariadas. `TimeSeries` exige:
+Cada modelo marginal trabalha com uma série univariada. A camada de composição pode combinar
+várias dessas distribuições sem transformá-las em um modelo multivariado. `TimeSeries` exige:
 
 - `series_id` não vazio;
 - `DatetimeIndex` crescente, único e com timezone;
@@ -339,6 +340,50 @@ risk.first_passage_probability  # primeira passagem por horizonte
 
 O risco de trajetória usa caminhos conjuntos; probabilidades marginais não são somadas.
 
+### 7.1 Composição probabilística e hierárquica
+
+`ForecastVariable` permite combinar séries previstas, conhecidas, constantes e cenários com os
+operadores `+`, `-`, `*`, `/` e potência escalar. Modelos marginais são pré-selecionados pela
+política existente; `backtest_expression()` escolhe a combinação pelo CRPS normalizado das saídas.
+
+```python
+a = engine.variable("a", series_a, mode="forecast")
+b = engine.variable("b", series_b, mode="forecast")
+scale = engine.variable("scale", future_scale, mode="known", vintages=scale_vintages)
+
+leaf_a = scale * a
+leaf_b = b + 1.0
+outputs = {"leaf/a": leaf_a, "leaf/b": leaf_b, "total": leaf_a + leaf_b}
+
+training = engine.backtest_expression(
+    outputs,
+    backtest=BacktestConfig(initial_train_size=40, horizon=1, step=4),
+    policy=CompositionPolicy(preselect_top_k=2, max_combinations=32),
+    promote_as="composition-champion",
+)
+forecast = engine.compose(
+    outputs, model_ref="composition-champion", horizon=12, n_paths=5_000
+)
+```
+
+Os erros PIT rolling-origin sincronizados estimam uma cópula residual com shrinkage. Se a amostra
+emparelhada for insuficiente, o motor usa independência e registra o fallback. Todos os nós são
+avaliados nos mesmos caminhos, de modo que grupos e total fecham exatamente. Agregados ainda não
+alteram a média das folhas; isso exigiria reconciliação ou um modelo global.
+
+Para uma entrada pronta baseada em grupos, use o
+[Notebook 16](notebooks/16_ciclo_hierarquico_dict.ipynb). A única célula editável retorna:
+
+```python
+GROUPED_SERIES = {
+    "grupo_a": [serie_a1, serie_a2],
+    "grupo_b": [serie_b1, serie_b2],
+}
+```
+
+O notebook valida e nomeia as folhas, constrói os nós de grupo e um total global opcional, executa
+o backtest composto e verifica a igualdade das matrizes de trajetórias em todos os níveis.
+
 ## 8. Monitoramento sequencial
 
 `start_monitoring()` emite e preserva um forecast antes de qualquer realizado. Quando a nova
@@ -440,6 +485,7 @@ simulation = engine.simulate("demanda", horizon=12, n_paths=10_000, seed=42)
 | Distribuições e artefatos | [`contracts.py`](src/time_series_lab/contracts.py) | [Notebook 13](notebooks/13_sistema_final.ipynb) |
 | Change-point offline | [`change_points.py`](src/time_series_lab/change_points.py) | [Notebook 11](notebooks/11_change_point.ipynb) |
 | CUSUM/EWMA online | [`detectors.py`](src/time_series_lab/detectors.py) | [Notebook 12](notebooks/12_cusum_ewma.ipynb) |
+| Composição e hierarquia | [`composition.py`](src/time_series_lab/composition.py) | [Notebook 15](notebooks/15_composicao_probabilistica_hierarquica.ipynb) |
 | Orquestração completa | [`ForecastEngine`](src/time_series_lab/engine.py) | Notebooks [13](notebooks/13_sistema_final.ipynb) e [14](notebooks/14_ciclo_completo_usuario.ipynb) |
 
 A referência detalhada da API está em [`docs/engine_api.md`](docs/engine_api.md). A visão do
@@ -463,6 +509,8 @@ sistema e seus limites estão em [`docs/system_vision.md`](docs/system_vision.md
 | [12](notebooks/12_cusum_ewma.ipynb) | Detecção sequencial | ARL, falso alarme, atraso, CUSUM e EWMA |
 | [13](notebooks/13_sistema_final.ipynb) | Sistema final | seleção, persistência, monitoramento, risco e API |
 | [14](notebooks/14_ciclo_completo_usuario.ipynb) | Ciclo guiado | uma `pandas.Series` do usuário percorre caracterização, seleção, forecast, risco e monitoramento |
+| [15](notebooks/15_composicao_probabilistica_hierarquica.ipynb) | Composição e hierarquia | grafo probabilístico, dependência residual, vintages, covariância e árvore coerente |
+| [16](notebooks/16_ciclo_hierarquico_dict.ipynb) | Dicionário hierárquico | `dict[str, list[pd.Series]]` percorre validação, seleção, grupos, total e risco |
 
 Cada notebook possui plano em `docs/plano_notebook_XX.md`, funções matemáticas explícitas,
 exercícios, gabarito e testes rápidos.
@@ -528,9 +576,11 @@ time-series-forecast/
 
 ## 15. Limites atuais
 
-- séries univariadas, regulares e sem valores ausentes no contrato global;
+- cada modelo marginal exige série univariada, regular e sem valores ausentes;
 - candidatos e ordens ARIMA definidos explicitamente pela aplicação;
 - diagnóstico residual ainda não é guardrail automático de seleção;
+- agregados compostos não corrigem a média das folhas e não há reconciliação MinT;
+- o monitoramento sequencial ainda opera sobre séries materializadas, não sobre o grafo composto;
 - `MemoryRepository` é apenas didático;
 - paralelismo, banco transacional, autenticação e agendamento pertencem à aplicação hospedeira;
 - detecção de mudança não implica antecipação causal antes de surgirem sinais observáveis.

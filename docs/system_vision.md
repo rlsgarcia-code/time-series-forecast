@@ -1,7 +1,7 @@
 # Time Series Lab — Visão do Sistema
 
-**Status:** Protótipo educacional e operacional univariado 01–13 concluído  
-**Escopo inicial:** Séries temporais univariadas
+**Status:** Motor marginal univariado e composição probabilística 01–16 concluídos
+**Escopo atual:** Modelos marginais univariados e grafos derivados hierárquicos
 
 ## 1. Objetivo
 
@@ -93,7 +93,9 @@ Probabilidades produzidas pelo sistema deverão ser validadas empiricamente.
 
 Simular uma intervenção hipotética não equivale a estimar seu efeito causal.
 
-O escopo inicial não inclui modelos multivariados, recomendações automáticas de intervenção ou execução autônoma de ações.
+O escopo atual não inclui modelos globais multivariados, reconciliação MinT, recomendações
+automáticas de intervenção ou execução autônoma de ações. A composição compartilha caminhos e
+dependência residual, mas níveis agregados ainda não corrigem a média das folhas.
 
 ## 8. Estratégia de desenvolvimento
 
@@ -114,9 +116,13 @@ O produto será desenvolvido incrementalmente a partir dos notebooks de aprendiz
 - integração de artefatos imutáveis, monitor causal, risco e política auditável: Notebook 13.
 - execução guiada do ciclo completo a partir de uma `pandas.Series`, com política explicável de
   geração de candidatos: Notebook 14.
+- composição de séries previstas/conhecidas, cópula residual, covariância e árvore coerente:
+  Notebook 15.
+- ciclo guiado a partir de `dict[str, list[pd.Series]]`, com grupos e total automáticos:
+  Notebook 16.
 
-O Notebook 13 conclui o protótipo local e univariado; o Notebook 14 o transforma em um fluxo
-executável com uma única célula de entrada para os dados do usuário. Banco transacional, execução distribuída,
-controle de acesso e operação multivariada permanecem passos de produção, não lacunas da trilha
-didática. A demonstração EWMA do Notebook 08, isoladamente, não contava como
-cobertura conceitual completa desses detectores.
+O Notebook 14 transforma o motor univariado em um fluxo guiado; o Notebook 15 adiciona composição
+probabilística sem converter os adaptadores em modelos multivariados. Banco transacional, execução
+distribuída, controle de acesso, reconciliação e monitoramento composto permanecem passos de
+produção. A demonstração EWMA do Notebook 08, isoladamente, não contava como cobertura conceitual
+completa desses detectores.

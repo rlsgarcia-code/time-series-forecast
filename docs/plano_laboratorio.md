@@ -49,6 +49,9 @@ O laboratório não será apenas uma coleção de notebooks. Ao final, o reposit
 | 11 | Change-point detection | Como localizar quebras estruturais? | custos segmentados, penalização, calibração e avaliação offline | concluído |
 | 12 | CUSUM e EWMA | Como detectar drift sequencialmente? | estatísticas online, ARL, limiares e compromisso atraso/falso alarme | concluído |
 | 13 | Sistema integrado final | Como combinar modelos, detectores, risco e alertas? | pipeline persistente com políticas e auditoria end-to-end | concluído |
+| 14 | Ciclo completo do usuário | Como levar uma `pandas.Series` por todo o motor? | caracterização, candidatos, seleção, risco e monitoramento guiados | concluído |
+| 15 | Composição probabilística e hierárquica | Como combinar séries previstas e conhecidas sem perder dependência? | grafo, cópula residual, vintages, covariância e árvore coerente | concluído |
+| 16 | Dicionário hierárquico do usuário | Como executar a árvore a partir de grupos de `pd.Series`? | entrada editável, folhas, grupos, total, dependência e risco | concluído |
 
 O plano de cada notebook é refinado e documentado em `docs/plano_notebook_XX.md` antes de sua
 implementação. A ordem pode ser ajustada com base no aprendizado, mas mudanças devem ser
@@ -110,13 +113,14 @@ vazamento temporal.
 
 ## Evidência de conclusão
 
-- notebooks e planos específicos versionados para toda a trilha 01–13;
+- notebooks e planos específicos versionados para toda a trilha 01–16;
 - funções matemáticas centrais explícitas em cada notebook;
 - geradores reproduzíveis em `scripts/build_notebook_XX.py`;
 - biblioteca reutilizável para processos, estimação, volatilidade, backtesting e artefatos;
 - validação automatizada de cada notebook em kernel limpo;
 - suíte de testes cobrindo invariantes numéricas, contratos e estrutura;
-- Notebook 13 demonstrando o fluxo end-to-end com monitoramento calibrado, detecção e risco.
+- Notebook 14 demonstrando o fluxo univariado guiado e Notebook 15 demonstrando composição
+  probabilística, dependência residual e coerência hierárquica.
 
 O Notebook 08 permanece como integração do primeiro ciclo; ele não substitui os capítulos de
 Kalman, regimes, change-point ou detecção sequencial.

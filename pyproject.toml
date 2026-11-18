@@ -1,6 +1,6 @@
 [project]
 name = "time-series-lab"
-version = "0.2.0"
+version = "0.3.0"
 description = "Laboratório didático e reproduzível de séries temporais e previsão probabilística"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"

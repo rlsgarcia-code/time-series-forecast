@@ -695,6 +695,9 @@ CELLS = [
     monitoramento. O notebook deixou visíveis os candidatos, os critérios, os resíduos, a
     distribuição futura, o risco e os eventos sequenciais. Para produção, substitua o repositório
     em memória e mantenha os mesmos contratos estatísticos e de auditoria.
+
+    **Próximo passo:** o [Notebook 15](15_composicao_probabilistica_hierarquica.ipynb) combina
+    várias distribuições, séries conhecidas e nós hierárquicos sobre trajetórias conjuntas.
     """),
 ]
 

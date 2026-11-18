@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
 import numpy as np
@@ -11,6 +12,14 @@ from scipy.stats import norm
 
 from .adapters import built_in_adapters
 from .candidate_policy import CandidatePlan, CandidatePolicy
+from .composition import (
+    ComposedForecast,
+    CompositionPolicy,
+    CompositionRun,
+    ForecastVariable,
+    compose_outputs,
+    train_expression,
+)
 from .change_points import optimal_mean_segmentation
 from .detectors import built_in_detector_factories
 from .diagnostics import (
@@ -43,6 +52,7 @@ from .contracts import (
     Observation,
     PromotionPolicy,
     PromotionRecord,
+    PredictiveDistribution,
     RepositoryConflictError,
     ResidualDiagnostics,
     RiskReport,
@@ -90,6 +100,7 @@ class ForecastEngine:
         self.capabilities = EngineCapabilities(
             model_families=self.models.families,
             detector_families=self.detectors.families + ("change_point",),
+            compositional=True,
         )
 
     # ------------------------------------------------------------------ dados
@@ -122,6 +133,139 @@ class ForecastEngine:
 
     def list_series(self) -> tuple[TimeSeries, ...]:
         return tuple(self.repository.list_series())
+
+    def variable(
+        self,
+        name: str,
+        source: Any,
+        *,
+        mode: str = "forecast",
+        vintages: pd.DataFrame | None = None,
+    ) -> ForecastVariable:
+        """Cria uma folha do grafo e registra séries ``forecast`` quando necessário."""
+
+        if mode == "forecast":
+            if vintages is not None:
+                raise ValidationError("vintages só se aplica a variáveis known")
+            if isinstance(source, pd.Series):
+                series = TimeSeries.from_pandas(name, source)
+                try:
+                    existing = self.repository.get_series(name)
+                except (KeyError, LookupError):
+                    self.register_series(series)
+                else:
+                    if not (
+                        existing.timestamps.equals(series.timestamps)
+                        and np.array_equal(existing.values, series.values)
+                    ):
+                        raise ValidationError(f"série já registrada com outro conteúdo: {name}")
+                source = name
+            elif isinstance(source, TimeSeries):
+                try:
+                    existing = self.repository.get_series(source.series_id)
+                except (KeyError, LookupError):
+                    self.register_series(source)
+                else:
+                    if not (
+                        existing.timestamps.equals(source.timestamps)
+                        and np.array_equal(existing.values, source.values)
+                    ):
+                        raise ValidationError(
+                            f"série já registrada com outro conteúdo: {source.series_id}"
+                        )
+                source = source.series_id
+            elif isinstance(source, str):
+                self.repository.get_series(source)
+            else:
+                raise ValidationError("forecast exige pd.Series, TimeSeries ou series_id")
+        elif mode == "constant":
+            if not np.isscalar(source) or not np.isfinite(float(source)):
+                raise ValidationError("constant exige escalar finito")
+            if vintages is not None:
+                raise ValidationError("constant não aceita vintages")
+            source = float(source)
+        elif mode == "known":
+            if not (np.isscalar(source) or isinstance(source, pd.Series)):
+                raise ValidationError("known exige escalar ou pandas.Series")
+            if np.isscalar(source):
+                if not np.isfinite(float(source)):
+                    raise ValidationError("known exige valor finito")
+                source = float(source)
+            else:
+                self._validate_deterministic_series(name, source)
+                source = source.copy(deep=True)
+            vintages = self._validate_vintages(vintages)
+        elif mode == "scenario":
+            if not isinstance(source, Mapping) or not source:
+                raise ValidationError("scenario exige mapa nome -> escalar/pandas.Series")
+            if any(
+                not (np.isscalar(value) or isinstance(value, pd.Series))
+                for value in source.values()
+            ):
+                raise ValidationError("cada cenário deve ser escalar ou pandas.Series")
+            if vintages is not None:
+                raise ValidationError("scenario não aceita vintages na primeira versão")
+            copied: dict[str, Any] = {}
+            for scenario_name, value in source.items():
+                if np.isscalar(value):
+                    if not np.isfinite(float(value)):
+                        raise ValidationError("cenários escalares devem ser finitos")
+                    copied[str(scenario_name)] = float(value)
+                else:
+                    self._validate_deterministic_series(name, value)
+                    copied[str(scenario_name)] = value.copy(deep=True)
+            source = MappingProxyType(copied)
+        else:
+            raise ValidationError("mode deve ser forecast, known, constant ou scenario")
+        return ForecastVariable.leaf(name, mode=mode, source=source, vintages=vintages)
+
+    @staticmethod
+    def _validate_deterministic_series(name: str, series: pd.Series) -> None:
+        index = pd.DatetimeIndex(series.index)
+        if (
+            index.tz is None
+            or not index.is_monotonic_increasing
+            or not index.is_unique
+            or np.any(~np.isfinite(pd.to_numeric(series, errors="coerce")))
+        ):
+            raise ValidationError(
+                f"{name}: série determinística exige índice temporal ordenado/único, "
+                "timezone e valores finitos"
+            )
+
+    @staticmethod
+    def _validate_vintages(vintages: pd.DataFrame | None) -> pd.DataFrame | None:
+        if vintages is None:
+            return None
+        required = {"as_of", "target", "value"}
+        if not required.issubset(vintages.columns):
+            raise ValidationError("vintages exige colunas as_of, target e value")
+        frame = vintages.loc[:, ["as_of", "target", "value"]].copy()
+        frame["as_of"] = pd.to_datetime(frame["as_of"])
+        frame["target"] = pd.to_datetime(frame["target"])
+        if frame["as_of"].dt.tz is None or frame["target"].dt.tz is None:
+            raise ValidationError("as_of e target devem ter timezone")
+        frame["value"] = pd.to_numeric(frame["value"], errors="coerce")
+        if frame.empty or frame["value"].isna().any() or np.any(~np.isfinite(frame["value"])):
+            raise ValidationError("vintages deve conter valores finitos")
+        if frame.duplicated(["as_of", "target"]).any():
+            raise ValidationError("vintages não pode repetir (as_of, target)")
+        return frame.sort_values(["as_of", "target"]).reset_index(drop=True)
+
+    def transform(
+        self,
+        name: str,
+        function,
+        *inputs: ForecastVariable,
+        version: str,
+    ) -> ForecastVariable:
+        """Adiciona uma transformação vetorizada privada e versionada ao grafo."""
+
+        if not callable(function):
+            raise ValidationError("function deve ser chamável")
+        if not inputs or any(not isinstance(item, ForecastVariable) for item in inputs):
+            raise ValidationError("transform exige ao menos uma ForecastVariable")
+        return ForecastVariable.transform(name, function, inputs, version=version)
 
     def characterize(self, series_id: str, *, max_lag: int = 20) -> SeriesProfile:
         return characterize_series(self.repository.get_series(series_id), max_lag=max_lag)
@@ -432,6 +576,50 @@ class ForecastEngine:
         )
         return TrainingResult(report, decision, run, record)
 
+    def backtest_expression(
+        self,
+        outputs: ForecastVariable | Mapping[str, ForecastVariable],
+        *,
+        backtest: BacktestConfig,
+        candidate_policy: CandidatePolicy | None = None,
+        policy: CompositionPolicy | None = None,
+        promote_as: str | None = None,
+    ) -> CompositionRun:
+        """Seleciona modelos pelas saídas derivadas e congela uma composição auditável."""
+
+        return train_expression(
+            self,
+            outputs,
+            backtest=backtest,
+            candidate_policy=candidate_policy,
+            policy=policy,
+            promote_as=promote_as,
+        )
+
+    def compose(
+        self,
+        outputs: ForecastVariable | Mapping[str, ForecastVariable],
+        *,
+        model_ref: str | CompositionRun,
+        horizon: int,
+        n_paths: int = 5_000,
+        seed: int | None = None,
+        scenario: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> ComposedForecast:
+        """Avalia todas as saídas sobre o mesmo conjunto de trajetórias conjuntas."""
+
+        return compose_outputs(
+            self,
+            outputs,
+            model_ref=model_ref,
+            horizon=horizon,
+            n_paths=n_paths,
+            seed=self.config.default_seed if seed is None else seed,
+            scenario=scenario,
+            metadata=metadata,
+        )
+
     # -------------------------------------------------------- forecast e risco
     def _resolve_run(self, series_id: str, model_ref: str | None) -> ModelRun:
         reference = model_ref or self.config.default_alias
@@ -540,15 +728,24 @@ class ForecastEngine:
         )
 
     def assess_risk(
-        self, source: Forecast | SimulationResult, threshold: ThresholdRisk
+        self,
+        source: Forecast | SimulationResult | PredictiveDistribution,
+        threshold: ThresholdRisk,
     ) -> RiskReport:
-        if isinstance(source, Forecast):
-            paths = source.distribution.sample(threshold.n_paths, seed=threshold.seed)
-            values = np.repeat(threshold.limit, source.distribution.horizon)
+        distribution = (
+            source.distribution
+            if isinstance(source, Forecast)
+            else source
+            if isinstance(source, PredictiveDistribution)
+            else None
+        )
+        if distribution is not None:
+            paths = distribution.sample(threshold.n_paths, seed=threshold.seed)
+            values = np.repeat(threshold.limit, distribution.horizon)
             if threshold.direction == "above":
-                marginal = 1.0 - source.distribution.cdf(values)
+                marginal = 1.0 - distribution.cdf(values)
             elif threshold.direction == "below":
-                marginal = source.distribution.cdf(values)
+                marginal = distribution.cdf(values)
             else:
                 raise ValidationError("direction deve ser above ou below")
         else:
@@ -781,6 +978,18 @@ class ForecastEngine:
 
     def get_model_run(self, model_run_id: str) -> ModelRun:
         return self.repository.get_model_run(model_run_id)
+
+    def get_composition_run(self, composition_ref: str) -> CompositionRun:
+        try:
+            return self.repository.get_composition_run(composition_ref)
+        except (KeyError, LookupError):
+            run_id = self.repository.get_composition_alias(composition_ref)
+            if run_id is None:
+                raise NotFittedError(f"composição/alias não encontrado: {composition_ref}")
+            return self.repository.get_composition_run(run_id)
+
+    def get_composed_forecast(self, forecast_id: str) -> ComposedForecast:
+        return self.repository.get_composed_forecast(forecast_id)
 
     def list_events(self, series_id: str) -> tuple[EngineEvent, ...]:
         return tuple(self.repository.list_events(series_id))
