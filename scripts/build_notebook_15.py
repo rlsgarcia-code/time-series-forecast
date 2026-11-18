@@ -64,6 +64,8 @@ CELLS = [
 
     | Objeto | Responsabilidade |
     |---|---|
+    | `CandidatePolicy` | transforma a caracterização de **uma entrada** em `ModelSpec` candidatos; não ajusta nem escolhe |
+    | `CompositionPolicy` | controla pré-seleção, combinações, caminhos, dependência, cobertura e causalidade do **conjunto** |
     | `ModelRun` | modelo ajustado, cutoff, revisão, especificação e estado estimado |
     | `ModelAdapter` | reconstrói o forecast do modelo sem conhecer a aplicação |
     | `PredictiveDistribution` | contrato marginal: média, variância, CDF, quantis e `sample()` |
@@ -74,6 +76,10 @@ CELLS = [
 
     Usaremos esses objetos diretamente. `ForecastEngine.compose()` aparecerá somente depois de a
     mecânica de baixo nível produzir a distribuição completa de `result_y`.
+
+    **Referências:** [método estatístico](../docs/metodo_composicao_probabilistica.md),
+    [mecânica completa da composição](../docs/composition_mechanics.md) e
+    [contratos públicos do motor](../docs/engine_api.md).
     """),
     md(r"""
     ## 2. Três entradas: duas previstas e uma configurável
@@ -201,6 +207,17 @@ CELLS = [
     Assim podemos observar se uma combinação que não contém todos os campeões marginais produz uma
     distribuição derivada melhor. Como há apenas uma saída, não existe ambiguidade sobre pesos de
     folhas, grupos ou total.
+
+    As duas políticas têm papéis diferentes:
+
+    | Política | Unidade de decisão | Neste exemplo |
+    |---|---|---|
+    | `CandidatePolicy` | uma série `forecast` | propõe até 4 specs por entrada usando caracterização |
+    | `CompositionPolicy` | o grafo completo | retém 2 por entrada, avalia até 4 combinações e usa dependência residual |
+
+    `CandidatePolicy` não vê $g$ e não declara vencedor. `CompositionPolicy` não cria modelos; ela
+    define como os candidatos marginais serão combinados e julgados pela distribuição de
+    `result_y`. Veja a [referência técnica](../docs/composition_mechanics.md#2-o-que-backtest_expression-executa).
     """),
     code(r"""
     candidate_policy = CandidatePolicy(
@@ -236,6 +253,23 @@ CELLS = [
     ]).sort_values("CRPS normalizado de Y")
     score_table
     """),
+    md(r"""
+    ### O que ocorreu dentro de `backtest_expression()`
+
+    1. coletou do grafo as folhas `forecast` e `known`;
+    2. validou cutoff/frequência comuns e os vintages de `input_z`;
+    3. caracterizou cada entrada prevista e aplicou `CandidatePolicy`;
+    4. executou backtest marginal e reteve os dois menores CRPS por entrada;
+    5. formou até quatro combinações desses modelos;
+    6. em cada origem, gerou caminhos, estimou dependência apenas com erros já observáveis,
+       materializou $X_3$, aplicou $g$ e calculou o CRPS de `result_y`;
+    7. selecionou a combinação com menor CRPS normalizado;
+    8. reajustou os modelos escolhidos no histórico completo e criou um `CompositionRun`.
+
+    Portanto, `backtest_expression()` faz **treinamento e seleção do conjunto**. Ele não emite o
+    forecast futuro e não retorna caminhos. A referência detalhada está em
+    [`docs/composition_mechanics.md`](../docs/composition_mechanics.md).
+    """),
     code(r"""
     pd.DataFrame([
         {"entrada": name, "modelo selecionado": repr(spec),
@@ -249,6 +283,10 @@ CELLS = [
     `backtest_expression()` devolve um `CompositionRun`, não o forecast. Ele congela quais
     `ModelRun` serão usados por entrada, suas revisões, os hashes do grafo e o
     `DependencyDiagnostics`. A partir daqui não haverá novo treinamento implícito.
+
+    Ele contém o placar e a decisão reproduzível, mas **não** contém caminhos futuros, a
+    distribuição de `result_y`, o código privado de $g$ ou os valores futuros de uma entrada
+    `known`. Esses elementos só são reunidos quando a aplicação chama `compose()`.
     """),
     code(r"""
     N_PATHS = 2_000
@@ -304,17 +342,99 @@ CELLS = [
     pd.DataFrame(marginal_rows).head(12).round(3)
     """),
     md(r"""
+    ### 8.1 De onde vem a CDF preditiva $\widehat F$
+
+    O PIT **não escolhe uma distribuição**. Cada modelo marginal entrega um objeto
+    `PredictiveDistribution`; é esse objeto que define $\widehat F_{i,t,h}$ condicional à
+    informação disponível no cutoff. A hipótese distributiva pertence ao adaptador:
+
+    | Família | Hipótese das inovações | `PredictiveDistribution` | Como calcula $\widehat F_h(x)$ |
+    |---|---|---|---|
+    | AR(1) | $\varepsilon_t\sim N(0,\sigma^2)$ | `GaussianDistribution` | normal analítica com média e variância recursivas |
+    | nível local/Kalman | ruídos de estado e observação gaussianos | `GaussianDistribution` | normal analítica obtida pelo filtro |
+    | Markov switching | normal condicional a cada regime | `GaussianMixtureDistribution` | soma ponderada das CDFs dos regimes |
+    | ARIMA | perturbações do estado-espaço ajustado | `EmpiricalDistribution` | proporção de trajetórias simuladas abaixo de $x$ |
+    | GARCH(1,1) | choque padronizado normal nesta implementação | `EmpiricalDistribution` | proporção de trajetórias simuladas abaixo de $x$ |
+
+    Nos casos gaussianos,
+
+    $$\widehat F_h(x)=\Phi\!\left(\frac{x-\widehat\mu_h}{\widehat\sigma_h}\right).$$
+
+    Para mistura de regimes,
+
+    $$\widehat F_h(x)=\sum_k \widehat p_{k,h}\,
+      \Phi\!\left(\frac{x-\widehat\mu_k}{\widehat\sigma_k}\right).$$
+
+    Para uma distribuição empírica com $M$ caminhos,
+
+    $$\widehat F_h(x)=\frac{1}{M}\sum_{m=1}^{M}
+      \mathbf 1\{X_h^{(m)}\le x\}.$$
+
+    Portanto, o chapéu reúne incerteza estimada pelo modelo e, no caso empírico, aproximação de
+    Monte Carlo. O motor avalia `distribution.cdf(realized)`; não ajusta uma normal por cima de
+    todas as famílias. A normal aparece novamente **depois** do PIT, em
+    $z=\Phi^{-1}(u)$, para colocar as surpresas numa escala comum e construir a cópula residual.
+
+    A derivação, hipóteses e limitações estão no
+    [método de composição probabilística](../docs/metodo_composicao_probabilistica.md#5-modelos-marginais-e-cdf-preditiva);
+    a correspondência com o código está na
+    [referência técnica — CDF preditiva](../docs/composition_mechanics.md#cdf-preditiva).
+    """),
+    code(r"""
+    cdf_rows = []
+    for variable_number, name in enumerate(forecast_names):
+        model_run = repository.get_model_run(training.selected_model_runs[name])
+        adapter = engine.models.get(model_run.spec.family)
+        distribution = adapter.forecast(
+            model_run, 1, seed=COMPOSE_SEED + variable_number * 10_000
+        )
+        reference_value = float(distribution.mean[0])
+        cdf_rows.append({
+            "entrada": name,
+            "modelo marginal": model_run.spec.family,
+            "objeto distributivo": type(distribution).__name__,
+            "x de referência": reference_value,
+            "F_hat(x)": float(distribution.cdf([reference_value])[0]),
+            "caminhos na CDF": (
+                distribution.paths.shape[0]
+                if isinstance(distribution, EmpiricalDistribution)
+                else "analítica"
+            ),
+        })
+    pd.DataFrame(cdf_rows).round(4)
+    """),
+    md(r"""
+    `F_hat(x)` não precisa ser $0{,}5$ quando `x` é a média de uma distribuição empírica ou
+    assimétrica. Isso é esperado: média e mediana são conceitos distintos.
+
+    A implicação $u=\widehat F(X)\sim U(0,1)$ vale quando a CDF preditiva contínua está
+    corretamente especificada. Logo, uniformidade do PIT é um **diagnóstico de calibração**, não
+    uma premissa garantida. Com CDF empírica finita, os PITs ficam numa grade; o motor os limita a
+    $[10^{-6},1-10^{-6}]$ antes de aplicar $\Phi^{-1}$.
+    """),
+    md(r"""
     ## 9. Passo 2 — Estime a dependência com erros de forecast
 
-    Para cada origem rolling-origin e variável prevista, o motor calcula
+    **Contexto:** os candidatos já foram avaliados marginalmente. Em cada origem rolling-origin,
+    cada modelo foi ajustado somente até um cutoff e emitiu uma CDF para o próximo timestamp. Quando
+    esse realizado fica disponível, o motor mede onde ele caiu na CDF emitida anteriormente:
 
     $$u_{i,t}=\widehat F_{i,t}(x_{i,t}),\qquad
       z_{i,t}=\Phi^{-1}(u_{i,t}).$$
 
-    Se o modelo marginal estiver calibrado, $u_{i,t}$ está aproximadamente em $(0,1)$ e
-    $z_{i,t}$ fica em escala normal. A correlação dos $z$ sincronizados mede o que os modelos erram
-    juntos. Ela recebe shrinkage para a identidade e reparo numérico para permanecer semidefinida
-    positiva.
+    Cada linha da matriz $Z$ é um **mesmo timestamp-alvo**; cada coluna é uma variável prevista.
+    Assim, a correlação dos $z$ mede surpresas que ocorreram juntas depois que a dinâmica marginal
+    já foi removida. Não usamos a correlação dos níveis, que pode refletir tendência comum ou escala.
+
+    Durante a avaliação de uma combinação no cutoff $c$, entram somente erros com alvo $t\le c$.
+    Isso evita usar um erro futuro para coordenar caminhos de uma previsão passada. O
+    `CompositionRun` final usa todos os erros um passo à frente disponíveis na janela de
+    desenvolvimento. A dependência temporal entre horizontes continua preservada dentro dos
+    caminhos de cada `PredictiveDistribution`.
+
+    A correlação amostral recebe shrinkage para a identidade e reparo para permanecer
+    semidefinida positiva. A fórmula e o algoritmo exatos estão na
+    [seção de dependência da referência técnica](../docs/composition_mechanics.md#3-dependência-contexto-do-passo-2).
 
     Com poucos pares, o motor usa independência e registra o fallback; não interpreta ausência de
     evidência como prova de independência.

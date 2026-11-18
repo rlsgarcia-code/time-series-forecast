@@ -371,6 +371,11 @@ emparelhada for insuficiente, o motor usa independência e registra o fallback. 
 avaliados nos mesmos caminhos, de modo que grupos e total fecham exatamente. Agregados ainda não
 alteram a média das folhas; isso exigiria reconciliação ou um modelo global.
 
+Para entender a formulação estatística, hipóteses, PIT, dependência, seleção e limitações, consulte
+o [método de composição probabilística](docs/metodo_composicao_probabilistica.md). Para acompanhar
+a correspondência fase por fase com `backtest_expression()`, `CompositionRun` e `compose()`, use a
+[referência técnica de composição](docs/composition_mechanics.md).
+
 Para uma entrada pronta baseada em grupos, use o
 [Notebook 16](notebooks/16_ciclo_hierarquico_dict.ipynb). A única célula editável retorna:
 

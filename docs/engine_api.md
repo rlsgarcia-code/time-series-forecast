@@ -266,6 +266,12 @@ permitida, e ela não pode ser promovida. Entradas `scenario` seguem a mesma reg
 por uma cópula de erros PIT sincronizados e devolve `ComposedForecast`. Cada saída é uma
 `EmpiricalDistribution`, portanto pode ser passada diretamente a `assess_risk()`.
 
+Papéis das políticas, fases exatas de `backtest_expression()`, estimação causal da dependência e
+conteúdo de `CompositionRun` estão detalhados em
+[`composition_mechanics.md`](composition_mechanics.md).
+A fundamentação estatística, suas hipóteses e limitações estão em
+[`metodo_composicao_probabilistica.md`](metodo_composicao_probabilistica.md).
+
 ```python
 run = engine.backtest_expression(
     {"leaf": leaf, "total": total},
