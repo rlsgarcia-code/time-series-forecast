@@ -119,7 +119,7 @@ O produto será desenvolvido incrementalmente a partir dos notebooks de aprendiz
 - composição detalhada de séries previstas/conhecidas em $Y=g(X_1,X_2,X_3)$, com objetos de baixo
   nível, cópula residual, covariância e distribuição empírica:
   Notebook 15.
-- ciclo guiado a partir de `dict[str, list[pd.Series]]`, com grupos e total automáticos:
+- ciclo guiado em que expressões $Y_j=g_j(X_{j1},\ldots,X_{jp})$ formam folhas, grupos e total:
   Notebook 16.
 
 O Notebook 14 transforma o motor univariado em um fluxo guiado; o Notebook 15 adiciona composição

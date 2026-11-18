@@ -18,7 +18,7 @@ CASES = [
     ("13_sistema_final.ipynb", ["Sistema integrado", "ForecastEnvelope", "SequentialMonitor", "backtest_registry", "risco de trajetória", "Exercícios"]),
     ("14_ciclo_completo_usuario.ipynb", ["Ciclo completo", "EDITE SOMENTE ESTA CÉLULA", "MISSING_VALUE_POLICY", "CandidatePolicy", "candidate_plan", "rolling-origin", "SelectionPolicy", "diagnose", "process_observation", "Exercícios"]),
     ("15_composicao_probabilistica_hierarquica.ipynb", ["g(X_1,X_2,X_3)", "distribuição marginal", "distribuição conjunta", "CandidatePolicy", "CompositionPolicy", "O que ocorreu dentro de", "CompositionRun", "ModelRun", "ModelAdapter", "PredictiveDistribution", "DependencyDiagnostics", "EmpiricalDistribution", "vintages", "timestamp-alvo", "De onde vem a CDF preditiva", "GaussianMixtureDistribution", "CDF empírica", "uniformidade do PIT", "metodo_composicao_probabilistica.md", "composition_mechanics.md", "align_paths_by_rank", "materialize_leaves", "evaluate_outputs", "distribuição empírica", "CDF", "covariância", "assess_risk", "Exercícios"]),
-    ("16_ciclo_hierarquico_dict.ipynb", ["dicionário de séries", "EDITE SOMENTE ESTA CÉLULA", "GROUPED_SERIES", "dict[str, list[pd.Series]]", "prepare_grouped_series", "leaf_nodes", "group_nodes", "backtest_expression", "Dependência entre folhas", "Prova de coerência", "Exercícios"]),
+    ("16_ciclo_hierarquico_dict.ipynb", ["Hierarquia de expressões probabilísticas", "EDITE SOMENTE ESTA CÉLULA", "GROUPED_EXPRESSIONS", "dict[str, dict[str, ForecastVariable]]", "build_grouped_expressions", "private_g", "entradas primitivas", "derived_leaf_outputs", "group_nodes", "backtest_expression", "Dependência entre entradas", "Prova de coerência", "Exercícios"]),
 ]
 
 

@@ -376,18 +376,19 @@ o [método de composição probabilística](docs/metodo_composicao_probabilistic
 a correspondência fase por fase com `backtest_expression()`, `CompositionRun` e `compose()`, use a
 [referência técnica de composição](docs/composition_mechanics.md).
 
-Para uma entrada pronta baseada em grupos, use o
+Para uma árvore cujas folhas são funções de variáveis aleatórias, use o
 [Notebook 16](notebooks/16_ciclo_hierarquico_dict.ipynb). A única célula editável retorna:
 
 ```python
-GROUPED_SERIES = {
-    "grupo_a": [serie_a1, serie_a2],
-    "grupo_b": [serie_b1, serie_b2],
+GROUPED_EXPRESSIONS = {
+    "grupo_a": {"item_1": expression_a1, "item_2": expression_a2},
+    "grupo_b": {"item_3": expression_b1},
 }
 ```
 
-O notebook valida e nomeia as folhas, constrói os nós de grupo e um total global opcional, executa
-o backtest composto e verifica a igualdade das matrizes de trajetórias em todos os níveis.
+Cada expressão pode multiplicar e somar entradas `forecast`, `known`, `constant` ou `scenario`.
+O notebook caracteriza as séries primitivas, seleciona seus modelos pelas saídas derivadas,
+constrói grupos e total e verifica a igualdade das matrizes em todos os níveis.
 
 ## 8. Monitoramento sequencial
 
@@ -515,7 +516,7 @@ sistema e seus limites estão em [`docs/system_vision.md`](docs/system_vision.md
 | [13](notebooks/13_sistema_final.ipynb) | Sistema final | seleção, persistência, monitoramento, risco e API |
 | [14](notebooks/14_ciclo_completo_usuario.ipynb) | Ciclo guiado | uma `pandas.Series` do usuário percorre caracterização, seleção, forecast, risco e monitoramento |
 | [15](notebooks/15_composicao_probabilistica_hierarquica.ipynb) | Composição de variáveis | distribuição de $Y=g(X_1,X_2,X_3)$ com objetos de baixo nível, caminhos conjuntos, covariância e CDF empírica |
-| [16](notebooks/16_ciclo_hierarquico_dict.ipynb) | Dicionário hierárquico | `dict[str, list[pd.Series]]` percorre validação, seleção, grupos, total e risco |
+| [16](notebooks/16_ciclo_hierarquico_dict.ipynb) | Hierarquia derivada | funções de variáveis aleatórias formam folhas, grupos, total e risco |
 
 Cada notebook possui plano em `docs/plano_notebook_XX.md`, funções matemáticas explícitas,
 exercícios, gabarito e testes rápidos.

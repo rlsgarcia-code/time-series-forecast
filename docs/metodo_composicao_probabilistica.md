@@ -13,7 +13,8 @@ Documentos complementares:
 - [`engine_api.md`](engine_api.md): contratos e chamadas públicas;
 - [Notebook 15](../notebooks/15_composicao_probabilistica_hierarquica.ipynb): derivação executável
   para uma saída genérica;
-- [Notebook 16](../notebooks/16_ciclo_hierarquico_dict.ipynb): aplicação a folhas, grupos e total.
+- [Notebook 16](../notebooks/16_ciclo_hierarquico_dict.ipynb): aplicação em que funções de
+  variáveis aleatórias formam folhas, grupos e total.
 
 A versão atual estima distribuições marginais separadamente, recupera dependência contemporânea
 dos erros probabilísticos e propaga trajetórias conjuntas por um grafo. Não é um modelo estrutural

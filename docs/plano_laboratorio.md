@@ -51,7 +51,7 @@ O laboratório não será apenas uma coleção de notebooks. Ao final, o reposit
 | 13 | Sistema integrado final | Como combinar modelos, detectores, risco e alertas? | pipeline persistente com políticas e auditoria end-to-end | concluído |
 | 14 | Ciclo completo do usuário | Como levar uma `pandas.Series` por todo o motor? | caracterização, candidatos, seleção, risco e monitoramento guiados | concluído |
 | 15 | Composição probabilística de variáveis | Como obter a distribuição de $Y=g(X_1,X_2,X_3)$? | objetos de baixo nível, marginais, cópula, broadcast e distribuição empírica | concluído |
-| 16 | Dicionário hierárquico do usuário | Como executar a árvore a partir de grupos de `pd.Series`? | entrada editável, folhas, grupos, total, dependência e risco | concluído |
+| 16 | Hierarquia de expressões do usuário | Como agregar folhas $g(X_1,\ldots,X_p)$ em grupos e total? | entradas primitivas, fórmulas privadas, dependência, somas e risco | concluído |
 
 O plano de cada notebook é refinado e documentado em `docs/plano_notebook_XX.md` antes de sua
 implementação. A ordem pode ser ajustada com base no aprendizado, mas mudanças devem ser

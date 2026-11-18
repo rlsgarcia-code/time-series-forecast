@@ -289,8 +289,9 @@ result = engine.compose(
 
 O hash identifica a estrutura em memória, mas o payload persistido contém somente hashes,
 linhagem, revisões, modelos e métricas. Alterar uma função privada exige alterar sua versão.
-O Notebook 16 fornece o adaptador didático completo para `dict[str, list[pd.Series]]`, incluindo
-limpeza causal, construção automática dos grupos e teste de coerência do total.
+O Notebook 16 fornece o ciclo didático para
+`dict[str, dict[str, ForecastVariable]]`: as séries primitivas recebem modelos, expressões privadas
+formam as folhas e as somas constroem grupos e total com coerência caminho a caminho.
 
 ## 9. Monitoramento causal
 

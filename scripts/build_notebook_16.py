@@ -1,4 +1,4 @@
-"""Constrói o Notebook 16: ciclo hierárquico a partir de dict de pandas Series."""
+"""Constrói o Notebook 16: hierarquia de expressões probabilísticas derivadas."""
 
 from pathlib import Path
 
@@ -11,43 +11,47 @@ PATH = ROOT / "notebooks" / "16_ciclo_hierarquico_dict.ipynb"
 
 CELLS = [
     md(r"""
-    # Notebook 16 — Ciclo hierárquico a partir de um dicionário de séries
+    # Notebook 16 — Hierarquia de expressões probabilísticas
 
-    **Entrada:** um `dict[str, list[pd.Series]]`. Cada chave identifica um grupo no nível
-    agregado; a lista contém as séries-folha pertencentes ao grupo.
+    Aqui uma folha de negócio **não é uma série prevista diretamente**. Ela é uma saída derivada:
 
-    ```python
-    GROUPED_SERIES = {
-        "grupo_a": [serie_a1, serie_a2],
-        "grupo_b": [serie_b1, serie_b2, serie_b3],
-    }
-    ```
+    $$Y_j=g_j(X_{j1},\ldots,X_{jp}),$$
 
-    O notebook constrói automaticamente forecasts para as folhas, soma as trajetórias dentro de
-    cada grupo e, opcionalmente, cria `TOTAL = soma(grupos)`.
+    em que as entradas $X$ podem ser previstas, conhecidas, constantes ou de cenário. As folhas
+    derivadas são organizadas em grupos e somadas caminho a caminho:
 
-    **Ao final você será capaz de:** validar o dicionário, auditar valores ausentes, caracterizar
-    as folhas, selecionar modelos, estimar dependência, produzir a árvore probabilística e provar
-    sua coerência caminho a caminho.
+    $$G_k=\sum_{j\in k}Y_j,\qquad T=\sum_kG_k.$$
+
+    A entrada principal será `GROUPED_EXPRESSIONS`, um
+    `dict[str, dict[str, ForecastVariable]]`. A chave externa identifica o grupo; a interna dá um
+    nome estável à folha derivada.
+
+    **Ao final você será capaz de:** construir fórmulas privadas, identificar as séries primitivas
+    realmente modeladas, selecionar seus modelos pela qualidade das saídas derivadas, gerar a
+    distribuição de cada folha/grupo/total e provar coerência em todas as trajetórias.
+
+    **Pré-requisito:** o [Notebook 15](15_composicao_probabilistica_hierarquica.ipynb) explica CDF,
+    PIT, dependência e avaliação de uma única função $g$.
     """),
     md(r"""
-    ## 1. Convenção da hierarquia
-
-    Neste notebook usamos os nomes:
+    ## 1. A árvore correta
 
     ```text
-    TOTAL opcional
-      ├── chave do dicionário / grupo 1
-      │     ├── pandas Series 1
-      │     └── pandas Series 2
-      └── chave do dicionário / grupo 2
-            ├── pandas Series 3
-            └── pandas Series 4
+    séries primitivas X                        ← recebem modelos marginais
+       ├── X_global ───────────────┐
+       ├── X_grupo_a ───────┐      │
+       └── X_aditivo_a1 ────┴──────┴─► Y_a1 = g(X...)  ← folha derivada
+                                            │
+    outras entradas ────────────────────────┴─► Y_a2
+                                                    │
+                                  G_a = Y_a1 + Y_a2│
+                                                    ├─► T = G_a + G_b
+                                  G_b = Y_b1 + Y_b2│
     ```
 
-    Se, no seu domínio, as chaves já representam o nível mais alto desejado, configure
-    `BUILD_GLOBAL_TOTAL=False`. Nenhuma reconciliação posterior é necessária para as somas: todos
-    os níveis são calculados sobre exatamente as mesmas trajetórias das folhas.
+    `CandidatePolicy` atua nas séries $X$. `CompositionPolicy` compara combinações desses modelos
+    usando CRPS e cobertura das saídas $Y$, $G$ e $T$. Uma entrada compartilhada é o **mesmo
+    objeto** em várias expressões e, por isso, usa exatamente o mesmo caminho em todas elas.
     """),
     setup_cell(
         "from functools import reduce\n"
@@ -55,58 +59,16 @@ CELLS = [
         "from examples.memory_repository import MemoryRepository\n"
         "from time_series_lab import (\n"
         "    BacktestConfig, CandidatePolicy, CompositionPolicy, ForecastEngine,\n"
-        "    ThresholdRisk, ValidationError,\n"
-        ")"
+        "    ForecastVariable, ThresholdRisk,\n"
+        ")\n"
+        "from time_series_lab.composition import collect_leaves"
     ),
     md(r"""
-    ## 2. Carregue suas séries
+    ## 2. Configuração e validação das séries primitivas
 
-    Edite somente a função abaixo. Cada item precisa ser uma `pd.Series` numérica com
-    `DatetimeIndex`. Dê nomes únicos às séries dentro de cada grupo: o identificador interno será
-    `grupo/nome`.
-
-    O exemplo padrão cria dois grupos e quatro folhas com choques globais e de grupo. Alguns `NaN`
-    internos foram colocados de propósito para exercitar a limpeza causal.
-    """),
-    code(r"""
-    # ==================== EDITE SOMENTE ESTA CÉLULA ====================
-    def load_grouped_series() -> dict[str, list[pd.Series]]:
-        rng = np.random.default_rng(1601)
-        index = pd.date_range("2023-01-01", periods=62, freq="D", tz="UTC")
-        global_shock = rng.normal(0, 0.45, len(index))
-        result: dict[str, list[pd.Series]] = {}
-
-        for group_number, group_name in enumerate(["grupo_norte", "grupo_sul"]):
-            group_shock = rng.normal(0, 0.55, len(index))
-            leaves = []
-            for leaf_number in range(2):
-                noise = rng.normal(0, 0.45, len(index))
-                values = np.zeros(len(index))
-                for t in range(1, len(index)):
-                    values[t] = (
-                        0.12 * (group_number + 1)
-                        + 0.58 * values[t - 1]
-                        + global_shock[t]
-                        + 0.65 * group_shock[t]
-                        + noise[t]
-                    )
-                leaves.append(pd.Series(values, index=index, name=f"item_{leaf_number + 1}"))
-            result[group_name] = leaves
-
-        result["grupo_norte"][0].iloc[11] = np.nan
-        result["grupo_sul"][1].iloc[27] = np.nan
-        return result
-
-    GROUPED_SERIES = load_grouped_series()
-    GROUPED_SERIES
-    """),
-    md(r"""
-    ## 3. Configuração
-
-    `ffill` substitui um valor interno ausente pelo último valor disponível e não olha o futuro.
-    Valores ausentes no último timestamp são rejeitados, pois preenchê-los inventaria a observação
-    mais recente. O backtest usa poucos candidatos no exemplo para permanecer rápido; aumente os
-    limites somente quando houver dados e orçamento computacional suficientes.
+    O exemplo usa 72 observações, deliberadamente menos de 80. `ffill` só preenche ausências
+    internas com informação passada; um `NaN` no cutoff é rejeitado. Frequência, timezone e cutoff
+    comuns continuam obrigatórios para as entradas `forecast` de uma composição.
     """),
     code(r"""
     TIMEZONE = "UTC"
@@ -121,250 +83,350 @@ CELLS = [
     MAX_COMBINATIONS = 1
     CANDIDATE_BUDGET = 4
     BACKTEST_PATHS = 120
+    OUTPUT_WEIGHTS = {"total": 2.0}
 
     if MISSING_VALUE_POLICY not in {"ffill", "error"}:
         raise ValueError("MISSING_VALUE_POLICY deve ser 'ffill' ou 'error'")
     """),
-    md(r"""
-    ## 4. Validação e limpeza explícitas
-
-    A função abaixo não está escondida no pacote para que as decisões de entrada permaneçam
-    visíveis. Ela verifica estrutura, nomes, tempo, frequência e finitude; remove somente `NaN`
-    iniciais, aplica a política aos ausentes internos e produz uma tabela de auditoria.
-
-    Históricos podem começar em datas diferentes, mas todas as folhas precisam terminar no mesmo
-    cutoff, ter a mesma frequência e possuir uma interseção suficiente para o backtest conjunto.
-    """),
     code(r"""
-    def prepare_grouped_series(
-        grouped: dict[str, list[pd.Series]],
+    def prepare_forecast_series(
+        name: str,
+        source: pd.Series,
         *,
         timezone_name: str,
         missing_policy: str,
         minimum_observations: int,
-    ) -> tuple[dict[str, dict[str, pd.Series]], pd.DataFrame]:
-        if not isinstance(grouped, dict) or not grouped:
-            raise TypeError("GROUPED_SERIES deve ser um dict não vazio")
+    ) -> tuple[pd.Series, dict]:
+        '''Valida e limpa uma série primitiva sem usar informação futura.'''
+        if not isinstance(source, pd.Series):
+            raise TypeError(f"{name}: source deve ser pd.Series")
+        if not isinstance(source.index, pd.DatetimeIndex):
+            raise TypeError(f"{name}: índice deve ser DatetimeIndex")
 
-        cleaned: dict[str, dict[str, pd.Series]] = {}
-        audit_rows: list[dict] = []
-        seen_ids: set[str] = set()
-        frequencies: set[str] = set()
-        cutoffs: set[pd.Timestamp] = set()
+        series = source.sort_index().copy()
+        if not series.index.is_unique:
+            raise ValueError(f"{name}: timestamps duplicados")
+        if series.index.tz is None:
+            series.index = series.index.tz_localize(timezone_name)
 
-        for raw_group, series_list in grouped.items():
-            group = str(raw_group).strip()
-            if not group:
-                raise ValueError("as chaves dos grupos não podem ser vazias")
-            if not isinstance(series_list, (list, tuple)) or not series_list:
-                raise TypeError(f"{group}: o valor deve ser uma lista não vazia de pd.Series")
-            cleaned[group] = {}
+        frequency = pd.infer_freq(series.index)
+        if frequency is None:
+            raise ValueError(f"{name}: frequência não pôde ser inferida")
+        expected = pd.date_range(series.index[0], periods=len(series), freq=frequency)
+        if not series.index.equals(expected):
+            raise ValueError(f"{name}: existem gaps; regularize a grade temporal")
 
-            for position, source in enumerate(series_list, start=1):
-                if not isinstance(source, pd.Series):
-                    raise TypeError(f"{group}[{position}] não é uma pd.Series")
-                leaf_name = str(source.name or f"serie_{position}").strip()
-                leaf_id = f"{group}/{leaf_name}"
-                if leaf_id in seen_ids:
-                    raise ValueError(f"identificador duplicado: {leaf_id}")
-                seen_ids.add(leaf_id)
+        numeric = pd.to_numeric(series, errors="coerce").astype(float)
+        numeric = numeric.replace([np.inf, -np.inf], np.nan)
+        if numeric.notna().sum() == 0:
+            raise ValueError(f"{name}: nenhum valor finito")
+        if pd.isna(numeric.iloc[-1]):
+            raise ValueError(f"{name}: o valor no cutoff não pode ser ausente")
 
-                if not isinstance(source.index, pd.DatetimeIndex):
-                    raise TypeError(f"{leaf_id}: índice deve ser DatetimeIndex")
-                series = source.sort_index().copy()
-                if not series.index.is_unique:
-                    raise ValueError(f"{leaf_id}: timestamps duplicados")
-                if series.index.tz is None:
-                    series.index = series.index.tz_localize(timezone_name)
-
-                frequency = pd.infer_freq(series.index)
-                if frequency is None:
-                    raise ValueError(f"{leaf_id}: não foi possível inferir frequência")
-                expected = pd.date_range(series.index[0], periods=len(series), freq=frequency)
-                if not series.index.equals(expected):
-                    raise ValueError(f"{leaf_id}: existem gaps; regularize antes da modelagem")
-
-                numeric = pd.to_numeric(series, errors="coerce").astype(float)
-                numeric = numeric.replace([np.inf, -np.inf], np.nan)
-                if numeric.notna().sum() == 0:
-                    raise ValueError(f"{leaf_id}: nenhum valor finito")
-                if pd.isna(numeric.iloc[-1]):
-                    raise ValueError(f"{leaf_id}: o último valor não pode ser ausente")
-
-                first_valid = int(np.flatnonzero(numeric.notna().to_numpy())[0])
-                trimmed = numeric.iloc[first_valid:].copy()
-                missing_count = int(trimmed.isna().sum())
-                if missing_count and missing_policy == "error":
-                    raise ValueError(f"{leaf_id}: {missing_count} valores ausentes")
-                if missing_policy == "ffill":
-                    trimmed = trimmed.ffill()
-                if trimmed.isna().any() or len(trimmed) < minimum_observations:
-                    raise ValueError(
-                        f"{leaf_id}: limpeza deixou menos de {minimum_observations} observações"
-                    )
-
-                trimmed.name = leaf_name
-                cleaned[group][leaf_id] = trimmed
-                frequencies.add(str(frequency))
-                cutoffs.add(trimmed.index[-1])
-                audit_rows.append({
-                    "grupo": group,
-                    "folha": leaf_id,
-                    "recebidas": len(source),
-                    "removidas_no_início": first_valid,
-                    "imputadas": missing_count,
-                    "observações_finais": len(trimmed),
-                    "início": trimmed.index[0],
-                    "cutoff": trimmed.index[-1],
-                    "frequência": frequency,
-                })
-
-        if len(frequencies) != 1:
-            raise ValueError(f"todas as folhas devem ter a mesma frequência: {frequencies}")
-        if len(cutoffs) != 1:
-            raise ValueError("todas as folhas devem possuir o mesmo cutoff")
-        return cleaned, pd.DataFrame(audit_rows)
-    """),
-    code(r"""
-    cleaned_groups, input_audit = prepare_grouped_series(
-        GROUPED_SERIES,
-        timezone_name=TIMEZONE,
-        missing_policy=MISSING_VALUE_POLICY,
-        minimum_observations=MINIMUM_OBSERVATIONS,
-    )
-    display(input_audit)
-    print(
-        f"{len(cleaned_groups)} grupos; "
-        f"{sum(len(items) for items in cleaned_groups.values())} folhas validadas."
-    )
-    """),
-    code(r"""
-    fig, axes = plt.subplots(len(cleaned_groups), 1, figsize=(12, 3.5 * len(cleaned_groups)),
-                             squeeze=False)
-    for ax, (group, leaves) in zip(axes[:, 0], cleaned_groups.items()):
-        for leaf_id, series in leaves.items():
-            ax.plot(series.index, series.values, lw=1, label=leaf_id.split("/", 1)[1])
-        ax.set_title(group); ax.legend(ncol=3)
-    plt.tight_layout(); plt.show()
-    """),
-    md(r"""
-    ## 5. Registro e caracterização das folhas
-
-    Cada folha continua sendo uma série univariada: ela recebe caracterização e candidatos próprios.
-    A hierarquia não substitui ACF, estacionariedade ou diagnóstico residual. Ela entra depois,
-    quando as distribuições marginais precisam ser avaliadas em conjunto.
+        first_valid = int(np.flatnonzero(numeric.notna().to_numpy())[0])
+        cleaned = numeric.iloc[first_valid:].copy()
+        missing_count = int(cleaned.isna().sum())
+        if missing_count and missing_policy == "error":
+            raise ValueError(f"{name}: {missing_count} valores ausentes")
+        if missing_policy == "ffill":
+            cleaned = cleaned.ffill()
+        if cleaned.isna().any() or len(cleaned) < minimum_observations:
+            raise ValueError(
+                f"{name}: limpeza deixou menos de {minimum_observations} observações"
+            )
+        cleaned.name = name
+        audit = {
+            "entrada": name,
+            "recebidas": len(source),
+            "removidas_no_início": first_valid,
+            "imputadas": missing_count,
+            "observações_finais": len(cleaned),
+            "início": cleaned.index[0],
+            "cutoff": cleaned.index[-1],
+            "frequência": frequency,
+        }
+        return cleaned, audit
     """),
     code(r"""
     repository = MemoryRepository()
     engine = ForecastEngine(repository=repository)
-    leaf_nodes: dict[str, dict[str, object]] = {}
+    input_audit_rows: list[dict] = []
 
-    for group, leaves in cleaned_groups.items():
-        leaf_nodes[group] = {
-            leaf_id: engine.variable(leaf_id, series, mode="forecast")
-            for leaf_id, series in leaves.items()
+    def forecast_input(name: str, source: pd.Series) -> ForecastVariable:
+        '''Ponto único de validação e registro das entradas aleatórias.'''
+        cleaned, audit = prepare_forecast_series(
+            name,
+            source,
+            timezone_name=TIMEZONE,
+            missing_policy=MISSING_VALUE_POLICY,
+            minimum_observations=MINIMUM_OBSERVATIONS,
+        )
+        input_audit_rows.append(audit)
+        return engine.variable(name, cleaned, mode="forecast")
+    """),
+    md(r"""
+    ## 3. Construa suas folhas derivadas
+
+    **Edite somente a célula abaixo.** Em uso real, carregue suas `pd.Series`, crie uma única vez
+    cada entrada compartilhada e componha as folhas. A função de exemplo
+    $g(a,b,c)=ab+c$ representa genericamente “variáveis aleatórias multiplicadas e depois
+    somadas”; substitua-a pela função privada da aplicação.
+
+    `engine.transform()` mantém a função apenas em memória. Persistem nome, versão e hash, nunca o
+    código ou a árvore privada.
+    """),
+    code(r"""
+    # ==================== EDITE SOMENTE ESTA CÉLULA ====================
+    def build_grouped_expressions(
+        engine: ForecastEngine,
+    ) -> dict[str, dict[str, ForecastVariable]]:
+        rng = np.random.default_rng(RANDOM_SEED)
+        index = pd.date_range("2024-01-01", periods=72, freq="D", tz="UTC")
+        common_shock = rng.normal(0.0, 0.08, len(index))
+
+        def ar_series(name: str, level: float, phi: float,
+                      shock: np.ndarray) -> pd.Series:
+            values = np.empty(len(index))
+            values[0] = level
+            for t in range(1, len(index)):
+                values[t] = level + phi * (values[t - 1] - level) + shock[t]
+            return pd.Series(values, index=index, name=name)
+
+        # Um fator global compartilhado por todas as folhas.
+        global_series = ar_series(
+            "global_factor", 1.15, 0.62,
+            common_shock + rng.normal(0.0, 0.05, len(index)),
+        )
+        global_factor = forecast_input("global_factor", global_series)
+
+        group_factors: dict[str, ForecastVariable] = {}
+        additive_terms: dict[tuple[str, str], ForecastVariable] = {}
+        for group_number, group in enumerate(["group_north", "group_south"]):
+            group_shock = rng.normal(0.0, 0.07, len(index))
+            group_series = ar_series(
+                f"{group}/factor", 0.90 + 0.18 * group_number, 0.52,
+                0.35 * common_shock + group_shock,
+            )
+            if group == "group_north":
+                group_series.iloc[12] = np.nan  # demonstra limpeza causal
+            group_factors[group] = forecast_input(f"{group}/factor", group_series)
+
+            for leaf_number in range(2):
+                leaf = f"item_{leaf_number + 1}"
+                additive_series = ar_series(
+                    f"{group}/{leaf}/additive",
+                    0.35 + 0.12 * leaf_number + 0.08 * group_number,
+                    0.45,
+                    0.20 * common_shock + 0.35 * group_shock
+                    + rng.normal(0.0, 0.06, len(index)),
+                )
+                if group == "group_south" and leaf == "item_2":
+                    additive_series.iloc[27] = np.nan
+                additive_terms[(group, leaf)] = forecast_input(
+                    f"{group}/{leaf}/additive", additive_series
+                )
+
+        def private_g(a_paths: np.ndarray, b_paths: np.ndarray,
+                      c_paths: np.ndarray) -> np.ndarray:
+            # Exemplo genérico. O código real pode permanecer no pacote da aplicação.
+            return a_paths * b_paths + c_paths
+
+        grouped: dict[str, dict[str, ForecastVariable]] = {}
+        for group in ["group_north", "group_south"]:
+            grouped[group] = {}
+            for leaf_number in range(2):
+                leaf = f"item_{leaf_number + 1}"
+                grouped[group][leaf] = engine.transform(
+                    "private-derived-leaf",
+                    private_g,
+                    global_factor,
+                    group_factors[group],
+                    additive_terms[(group, leaf)],
+                    version="v1",
+                )
+        return grouped
+
+    GROUPED_EXPRESSIONS = build_grouped_expressions(engine)
+    GROUPED_EXPRESSIONS
+    """),
+    md(r"""
+    ## 4. Valide o contrato do dicionário
+
+    O dicionário interno usa nomes de folhas em vez de uma lista para manter identidade estável em
+    auditoria, persistência e comparação de resultados. A quantidade de grupos e folhas pode mudar
+    sem alterar as células posteriores.
+    """),
+    code(r"""
+    def validate_grouped_expressions(
+        grouped: dict[str, dict[str, ForecastVariable]],
+    ) -> dict[str, dict[str, ForecastVariable]]:
+        if not isinstance(grouped, dict) or not grouped:
+            raise TypeError("GROUPED_EXPRESSIONS deve ser um dict não vazio")
+        validated: dict[str, dict[str, ForecastVariable]] = {}
+        seen_outputs: set[str] = set()
+        for raw_group, raw_leaves in grouped.items():
+            group = str(raw_group).strip()
+            if not group or not isinstance(raw_leaves, dict) or not raw_leaves:
+                raise TypeError("cada grupo deve ter nome e dict de expressões não vazio")
+            validated[group] = {}
+            for raw_leaf, expression in raw_leaves.items():
+                leaf = str(raw_leaf).strip()
+                output_name = f"leaf/{group}/{leaf}"
+                if not leaf or output_name in seen_outputs:
+                    raise ValueError(f"nome de folha vazio ou duplicado: {output_name}")
+                if not isinstance(expression, ForecastVariable):
+                    raise TypeError(f"{output_name}: valor deve ser ForecastVariable")
+                seen_outputs.add(output_name)
+                validated[group][leaf] = expression
+        return validated
+
+    grouped_expressions = validate_grouped_expressions(GROUPED_EXPRESSIONS)
+    derived_leaf_outputs = {
+        f"leaf/{group}/{leaf}": expression
+        for group, leaves in grouped_expressions.items()
+        for leaf, expression in leaves.items()
+    }
+    primitive_leaves = collect_leaves(derived_leaf_outputs)
+    forecast_leaves = {
+        name: leaf for name, leaf in primitive_leaves.items() if leaf.mode == "forecast"
+    }
+
+    structure_rows = [
+        {
+            "grupo": group,
+            "folha derivada": leaf,
+            "expression_id": expression.expression_id,
         }
+        for group, leaves in grouped_expressions.items()
+        for leaf, expression in leaves.items()
+    ]
+    display(pd.DataFrame(structure_rows))
+    display(pd.DataFrame(input_audit_rows))
+    print(
+        f"{len(grouped_expressions)} grupos; {len(derived_leaf_outputs)} folhas derivadas; "
+        f"{len(forecast_leaves)} entradas aleatórias primitivas."
+    )
+    """),
+    code(r"""
+    histories = {}
+    for name, leaf in forecast_leaves.items():
+        registered = engine.get_series(str(leaf.source))
+        histories[name] = pd.Series(
+            registered.values, index=registered.timestamps, name=name
+        )
+    ax = pd.concat(histories, axis=1).plot(figsize=(13, 5), lw=1, alpha=.85)
+    ax.set(title="Séries primitivas modeladas — não confundir com folhas derivadas",
+           xlabel="tempo", ylabel="valor")
+    ax.legend(ncol=3, fontsize=8); plt.show()
+    """),
+    md(r"""
+    ## 5. Caracterize as entradas primitivas
 
+    Não existe uma caracterização univariada separada de $Y_j$ nesta etapa: $Y_j$ é uma expressão.
+    ACF, estacionariedade, resíduos e candidatos pertencem a cada entrada aleatória $X$. O
+    desempenho de $Y_j$ será medido depois, quando as trajetórias conjuntas atravessarem $g$.
+    """),
+    code(r"""
     candidate_policy = CandidatePolicy(
+        max_ar_order=1,
+        max_ma_order=1,
+        max_total_order=2,
         max_candidates=CANDIDATE_BUDGET,
-        differencing="auto",
+        differencing="never",
         garch="never",
         markov_switching="never",
         simulation_paths=100,
     )
     characterization_rows = []
     candidate_plans = {}
-    for group, leaves in leaf_nodes.items():
-        for leaf_id in leaves:
-            profile = engine.characterize(leaf_id, max_lag=12)
-            plan = engine.propose_candidates(
-                leaf_id, policy=candidate_policy, profile=profile, series_kind="level"
-            )
-            candidate_plans[leaf_id] = plan
-            characterization_rows.append({
-                "grupo": group,
-                "folha": leaf_id,
-                "nobs": profile.nobs,
-                "ADF p": profile.adf_pvalue,
-                "KPSS p": profile.kpss_pvalue,
-                "Ljung-Box p": profile.ljung_box_pvalue,
-                "candidatos": len(plan.candidates),
-            })
+    for input_name in forecast_leaves:
+        profile = engine.characterize(input_name, max_lag=10)
+        plan = engine.propose_candidates(
+            input_name, policy=candidate_policy, profile=profile, series_kind="level"
+        )
+        candidate_plans[input_name] = plan
+        characterization_rows.append({
+            "entrada primitiva": input_name,
+            "nobs": profile.nobs,
+            "ADF p": profile.adf_pvalue,
+            "KPSS p": profile.kpss_pvalue,
+            "Ljung-Box p": profile.ljung_box_pvalue,
+            "candidatos": len(plan.candidates),
+        })
     pd.DataFrame(characterization_rows).round(4)
     """),
     code(r"""
-    # Exemplo da trilha explicável de uma folha; as demais estão em candidate_plans.
-    example_leaf = next(iter(candidate_plans))
-    print(candidate_plans[example_leaf].explain())
-    display(candidate_plans[example_leaf].to_frame(include_excluded=True))
+    example_input = next(iter(candidate_plans))
+    print(candidate_plans[example_input].explain())
+    display(candidate_plans[example_input].to_frame(include_excluded=True))
     """),
     md(r"""
-    ## 6. Construção automática do grafo
+    ## 6. Construa grupos e total a partir das expressões
 
-    Para folhas $Y_{g,1},\ldots,Y_{g,n_g}$ do grupo $g$,
+    Para cada caminho $m$ e horizonte $h$:
 
-    $$G_g=\sum_{i=1}^{n_g}Y_{g,i},\qquad
-      T=\sum_g G_g.$$
+    $$Y_{j,h}^{(m)}=g_j(X_{j1,h}^{(m)},\ldots,X_{jp,h}^{(m)}),$$
 
-    Essas igualdades não são impostas às médias depois do forecast. Elas são avaliadas para cada
-    caminho $m$ e horizonte $h$, garantindo
-    $T_h^{(m)}=\sum_g\sum_iY_{g,i,h}^{(m)}$ exatamente.
+    $$G_{k,h}^{(m)}=\sum_{j\in k}Y_{j,h}^{(m)},\qquad
+      T_h^{(m)}=\sum_kG_{k,h}^{(m)}.$$
+
+    A multiplicação ocorre antes da soma na própria trajetória. Fatores compartilhados e
+    dependência estimada entre entradas afetam automaticamente a distribuição dos agregados.
     """),
     code(r"""
-    def sum_nodes(nodes: list):
+    def sum_nodes(nodes: list[ForecastVariable]) -> ForecastVariable:
         if not nodes:
-            raise ValueError("não é possível somar lista vazia")
+            raise ValueError("não é possível somar uma lista vazia")
         return reduce(add, nodes)
 
     group_nodes = {
         group: sum_nodes(list(leaves.values()))
-        for group, leaves in leaf_nodes.items()
+        for group, leaves in grouped_expressions.items()
     }
     total_node = sum_nodes(list(group_nodes.values())) if BUILD_GLOBAL_TOTAL else None
 
-    outputs = {}
-    for group, leaves in leaf_nodes.items():
-        outputs.update({f"leaf/{leaf_id}": node for leaf_id, node in leaves.items()})
-        outputs[f"group/{group}"] = group_nodes[group]
+    outputs = dict(derived_leaf_outputs)
+    outputs.update({f"group/{group}": node for group, node in group_nodes.items()})
     if total_node is not None:
         outputs["total"] = total_node
 
-    hierarchy_table = []
-    for group, leaves in leaf_nodes.items():
-        for leaf_id in leaves:
-            hierarchy_table.append({
-                "nível": "folha", "nó": f"leaf/{leaf_id}", "pai": f"group/{group}"
+    hierarchy_rows = []
+    for group, leaves in grouped_expressions.items():
+        for leaf in leaves:
+            hierarchy_rows.append({
+                "nível": "folha derivada",
+                "nó": f"leaf/{group}/{leaf}",
+                "pai": f"group/{group}",
             })
-        hierarchy_table.append({
-            "nível": "grupo", "nó": f"group/{group}",
+        hierarchy_rows.append({
+            "nível": "grupo",
+            "nó": f"group/{group}",
             "pai": "total" if BUILD_GLOBAL_TOTAL else "—",
         })
     if BUILD_GLOBAL_TOTAL:
-        hierarchy_table.append({"nível": "total", "nó": "total", "pai": "—"})
-    pd.DataFrame(hierarchy_table)
+        hierarchy_rows.append({"nível": "total", "nó": "total", "pai": "—"})
+    pd.DataFrame(hierarchy_rows)
     """),
     md(r"""
-    ## 7. Backtest composto
+    ## 7. Backtest das expressões
 
-    A seleção ocorre em duas etapas:
+    O ciclo avalia modelos em duas escalas diferentes:
 
-    1. cada folha retém `PRESELECT_TOP_K` candidatos pelo desempenho marginal;
-    2. combinações limitadas por `MAX_COMBINATIONS` são avaliadas pelas saídas da árvore.
+    1. pré-seleção pelo CRPS marginal de cada entrada primitiva;
+    2. escolha final pelo CRPS normalizado das folhas derivadas, grupos e total.
 
-    Com $k$ candidatos e $n$ folhas, a grade ingênua teria $k^n$ combinações. O padrão `k=1`
-    mantém o exemplo escalável e ainda seleciona cada folha fora da amostra. Use `k=2` somente com
-    orçamento explícito e mantenha `MAX_COMBINATIONS` limitado.
+    Com `top_k=2` e $p$ entradas, existiriam até $2^p$ combinações. O tutorial usa `top_k=1` para
+    ser rápido; em produção, aumente-o somente com `max_combinations` e orçamento explícitos.
+    `OUTPUT_WEIGHTS` dá peso adicional ao total sem retirar as folhas e grupos da avaliação.
     """),
     code(r"""
-    common_start = max(series.index[0] for group in cleaned_groups.values() for series in group.values())
-    common_end = min(series.index[-1] for group in cleaned_groups.values() for series in group.values())
-    common_n = min(
-        int(((series.loc[common_start:common_end]).shape[0]))
-        for group in cleaned_groups.values() for series in group.values()
-    )
-    initial_train_size = max(24, int(0.58 * common_n))
-    available_origins = common_n - initial_train_size
-    backtest_step = max(1, available_origins // 4)
+    primitive_series = [engine.get_series(name) for name in forecast_leaves]
+    common_index = primitive_series[0].timestamps
+    for series in primitive_series[1:]:
+        common_index = common_index.intersection(series.timestamps)
+    common_n = len(common_index)
+    initial_train_size = max(30, int(0.50 * common_n))
+    backtest_step = max(1, (common_n - initial_train_size) // 10)
 
     backtest_config = BacktestConfig(
         initial_train_size=initial_train_size,
@@ -379,36 +441,46 @@ CELLS = [
         dependency="residual_copula",
         min_paired_errors=3,
         n_backtest_paths=BACKTEST_PATHS,
-        coverage_range=None,  # poucas origens no exemplo; cobertura continua sendo exibida
+        coverage_range=None,
+        output_weights=OUTPUT_WEIGHTS,
     )
     training = engine.backtest_expression(
         outputs,
         backtest=backtest_config,
         candidate_policy=candidate_policy,
         policy=composition_policy,
-        promote_as="hierarchy-champion",
+        promote_as="derived-hierarchy-champion",
     )
     pd.Series({
         "histórico comum": common_n,
         "treino inicial": initial_train_size,
         "passo": backtest_step,
+        "entradas modeladas": len(forecast_leaves),
+        "saídas avaliadas": len(outputs),
         "combinações avaliadas": len(training.scores),
         **training.metrics,
-    }, name="treinamento hierárquico").to_frame()
+    }, name="treinamento das expressões").to_frame()
     """),
     code(r"""
     selected_models = pd.DataFrame([
-        {"folha": name, "modelo": repr(spec), "model_run_id": training.selected_model_runs[name]}
+        {
+            "entrada primitiva": name,
+            "modelo": repr(spec),
+            "model_run_id": training.selected_model_runs[name],
+        }
         for name, spec in training.selected_specs.items()
     ])
     selected_models
     """),
     md(r"""
-    ## 8. Dependência entre folhas
+    ## 8. Dependência entre entradas, não entre folhas derivadas
 
-    O motor sincroniza erros PIT de forecast, aplica shrinkage e usa uma cópula de ranks. Uma
-    correlação positiva significa que caminhos relativamente altos tendem a ser associados; não
-    significa causalidade nem que uma folha foi usada para prever a média da outra.
+    A matriz abaixo pertence aos erros PIT das entradas primitivas. As folhas $Y_j$ não recebem
+    uma cópula adicional: sua dependência é consequência dos caminhos conjuntos dos $X$, dos nós
+    compartilhados e das funções $g_j$.
+
+    Shrinkage alto é esperado com poucas observações e muitas entradas. Isso deve aparecer no
+    diagnóstico, não ser escondido como se a dependência tivesse sido estimada com precisão.
     """),
     code(r"""
     dependency = training.dependency
@@ -417,31 +489,32 @@ CELLS = [
         index=dependency.variable_names,
         columns=dependency.variable_names,
     )
-    fig, ax = plt.subplots(figsize=(7, 6))
+    fig, ax = plt.subplots(figsize=(8, 7))
     image = ax.imshow(correlation, vmin=-1, vmax=1, cmap="coolwarm")
     ax.set_xticks(range(len(correlation)), correlation.columns, rotation=45, ha="right")
     ax.set_yticks(range(len(correlation)), correlation.index)
     for row in range(len(correlation)):
         for column in range(len(correlation)):
-            ax.text(column, row, f"{correlation.iloc[row, column]:.2f}", ha="center", va="center")
+            ax.text(column, row, f"{correlation.iloc[row, column]:.2f}",
+                    ha="center", va="center", fontsize=8)
     ax.set_title(
-        f"Dependência residual — pares={dependency.paired_errors}, "
+        f"PIT das entradas — pares={dependency.paired_errors}, "
         f"shrinkage={dependency.shrinkage:.2f}"
     )
     fig.colorbar(image, ax=ax, shrink=.8); plt.tight_layout(); plt.show()
-    print(dependency.reason)
+    print({"fallback": dependency.fallback, "motivo": dependency.reason})
     """),
     md(r"""
-    ## 9. Forecast de toda a árvore em uma chamada
+    ## 9. Forecast de folhas derivadas, grupos e total
 
-    `compose()` usa os modelos congelados pelo alias, verifica revisões e calcula todas as saídas
-    com os mesmos índices de caminhos. As distribuições das folhas permanecem disponíveis; os
-    grupos e o total são `EmpiricalDistribution` como qualquer outra saída.
+    `compose()` reconstrói as distribuições marginais congeladas no `CompositionRun`, coordena seus
+    caminhos, avalia todas as funções privadas e agrega os resultados. Nenhum $Y_j$ é previsto por
+    um modelo univariado independente.
     """),
     code(r"""
     forecast = engine.compose(
         outputs,
-        model_ref="hierarchy-champion",
+        model_ref="derived-hierarchy-champion",
         horizon=FORECAST_HORIZON,
         n_paths=N_FORECAST_PATHS,
         seed=RANDOM_SEED + 1,
@@ -460,31 +533,38 @@ CELLS = [
                 "p95": quantiles[2, step],
             })
     forecast_summary = pd.DataFrame(summary_rows)
-    forecast_summary.head(12).round(3)
+    forecast_summary.head(14).round(4)
     """),
     code(r"""
-    nodes_to_plot = [name for name in forecast.distributions if name.startswith("group/")]
+    nodes_to_plot = list(derived_leaf_outputs) + [
+        name for name in forecast.distributions if name.startswith("group/")
+    ]
     if BUILD_GLOBAL_TOTAL:
         nodes_to_plot.append("total")
-    fig, ax = plt.subplots(figsize=(12, 5))
+    fig, ax = plt.subplots(figsize=(13, 6))
     for node_name in nodes_to_plot:
         distribution = forecast.distributions[node_name]
-        bounds = distribution.quantile([0.05, 0.95])
         line, = ax.plot(forecast.targets, distribution.mean, marker="o", label=node_name)
-        ax.fill_between(forecast.targets, bounds[0], bounds[1], alpha=.12, color=line.get_color())
-    ax.set(title="Forecast dos grupos e do total", xlabel="target", ylabel="valor")
-    ax.legend(); plt.show()
+        if node_name == "total":
+            bounds = distribution.quantile([0.05, 0.95])
+            ax.fill_between(
+                forecast.targets, bounds[0], bounds[1], alpha=.14, color=line.get_color()
+            )
+    ax.set(title="Folhas derivadas, grupos e total", xlabel="target", ylabel="valor")
+    ax.legend(ncol=3, fontsize=8); plt.show()
     """),
     md(r"""
     ## 10. Prova de coerência caminho a caminho
 
-    Comparar apenas médias não é suficiente. A checagem correta usa a matriz completa
-    `(n_paths, horizon)`. O erro abaixo deve ser numericamente zero para cada grupo e para o total.
+    A igualdade relevante não é apenas entre médias. Para cada linha $m$ e horizonte $h$, a soma
+    das matrizes das folhas deve reproduzir o grupo, e a soma dos grupos deve reproduzir o total.
     """),
     code(r"""
     coherence_rows = []
-    for group, leaves in leaf_nodes.items():
-        leaf_sum = sum(forecast.paths[f"leaf/{leaf_id}"] for leaf_id in leaves)
+    for group, leaves in grouped_expressions.items():
+        leaf_sum = sum(
+            forecast.paths[f"leaf/{group}/{leaf}"] for leaf in leaves
+        )
         error = np.max(np.abs(forecast.paths[f"group/{group}"] - leaf_sum))
         coherence_rows.append({"nó": f"group/{group}", "erro_máximo": error})
 
@@ -494,19 +574,17 @@ CELLS = [
         coherence_rows.append({"nó": "total", "erro_máximo": total_error})
 
     coherence = pd.DataFrame(coherence_rows)
-    assert (coherence["erro_máximo"] == 0.0).all()
+    assert (coherence["erro_máximo"] <= 1e-12).all()
     coherence
     """),
     md(r"""
-    ## 11. Risco no total ou em qualquer grupo
+    ## 11. Risco sobre qualquer saída derivada
 
-    Escolher um nó não exige refazer o forecast. Aqui o limite é apenas didático; em uso real ele
-    deve vir de uma regra de domínio versionada.
+    Como toda saída é uma `EmpiricalDistribution`, a mesma API de risco funciona para uma folha,
+    um grupo ou o total sem refazer o forecast.
     """),
     code(r"""
-    risk_node = "total" if BUILD_GLOBAL_TOTAL else next(
-        name for name in forecast.distributions if name.startswith("group/")
-    )
+    risk_node = "total" if BUILD_GLOBAL_TOTAL else f"group/{next(iter(group_nodes))}"
     risk_distribution = forecast.distributions[risk_node]
     risk_limit = float(np.quantile(risk_distribution.paths, 0.80))
     risk = engine.assess_risk(
@@ -524,59 +602,66 @@ CELLS = [
     ).round(3)
     """),
     md(r"""
-    ## 12. Escala, limites e interpretação
+    ## 12. Limites operacionais
 
-    - O custo cresce com folhas × candidatos × origens; `top_k=1` evita explosão combinatória.
-    - A implementação atual executa o treinamento composto localmente e de forma sequencial. Para
-      centenas de folhas, distribua os backtests marginais na aplicação e preserve os mesmos seeds.
-    - Grupos compartilham incerteza por meio da cópula, mas não corrigem as médias uns dos outros.
-    - Uma chave com muitas folhas recebe o mesmo peso de saída que as demais somente se a política
-      de `output_weights` assim for configurada; revise pesos conforme a decisão de negócio.
-    - Séries com frequências diferentes exigem uma etapa anterior de agregação/alinhamento.
-    - Monitoramento composto e reconciliação com forecasts independentes dos agregados continuam
-      fora desta versão.
+    - O número relevante para a explosão combinatória é o de **entradas primitivas**, não o de
+      folhas derivadas. Com $p$ entradas e `top_k=k`, a grade ingênua tem $k^p$ combinações.
+    - Muitos $X$ e poucos erros emparelhados levam a shrinkage forte ou fallback independente.
+    - A mesma série econômica deve reutilizar o mesmo `ForecastVariable`; criar cópias semânticas
+      diferentes quebra o compartilhamento exato de caminhos.
+    - `known` e `scenario` são condicionais e têm variância zero dentro de uma execução.
+    - Grupos e total não corrigem as médias dos $X$; não há feedback agregado nem MinT nesta versão.
+    - O hash protege a identidade da função privada, mas sua aplicação deve reconstruí-la antes de
+      chamar `compose()` e incrementar a versão quando mudar o comportamento.
+
+    Consulte o [método de composição](../docs/metodo_composicao_probabilistica.md) para hipóteses,
+    validação e limitações completas.
     """),
     md(r"""
     ## 13. Exercícios
 
-    1. Adicione uma terceira série a `grupo_norte` e confirme que nenhuma outra célula muda.
-    2. Configure `BUILD_GLOBAL_TOTAL=False` e observe quais saídas permanecem.
-    3. Use séries com inícios diferentes e confirme que o backtest usa a interseção comum.
-    4. Troque `dependency` para `"independent"` e compare a largura do total.
-    5. Aumente `PRESELECT_TOP_K` para 2, limite combinações em 8 e compare o CRPS.
-    6. Forneça uma série com `NaN` no último ponto e explique por que a validação deve falhar.
+    1. Adicione `item_3` a `group_north` usando as mesmas entradas compartilhadas.
+    2. Crie uma nova entrada aleatória usada simultaneamente por folhas dos dois grupos.
+    3. Troque `private_g` por $g(a,b,c)=a(b+c)$ e incremente `version` para `v2`.
+    4. Use `engine.variable(..., mode="known")` em um dos operandos e forneça vintages.
+    5. Troque `dependency` para `"independent"` e compare a dispersão do total.
+    6. Aumente `PRESELECT_TOP_K` para 2 e explique por que `MAX_COMBINATIONS` precisa permanecer
+       limitado.
 
     <details><summary><strong>Gabarito orientativo</strong></summary>
 
-    1. A nova folha aparece em `leaf_nodes`, no grupo e no total automaticamente.
-    2. As folhas e grupos continuam; somente `total` deixa de ser construído.
-    3. `common_n` diminui para o intervalo disponível em todas as folhas.
-    4. A soma continua coerente, mas sua dispersão muda quando a dependência é removida.
-    5. Com quatro folhas, existem até $2^4=16$ combinações; somente oito serão avaliadas.
-    6. `ffill` no último ponto inventaria o estado mais recente e esconderia ausência operacional.
+    1. Apenas `GROUPED_EXPRESSIONS` muda; grupo, total e verificações incorporam a folha.
+    2. Reutilize o mesmo objeto em ambas as expressões para compartilhar exatamente os caminhos.
+    3. O novo hash impede que um `CompositionRun` antigo seja usado silenciosamente.
+    4. Vintages impedem que o backtest enxergue planos que ainda não existiam na origem.
+    5. A coerência algébrica permanece; quantis e risco mudam porque a distribuição conjunta muda.
+    6. Com $p$ entradas, até $2^p$ combinações podem existir antes do limite.
 
     </details>
     """),
     code(r"""
     # Testes rápidos do tutorial.
-    expected_leaf_count = sum(len(leaves) for leaves in cleaned_groups.values())
-    assert len(training.selected_model_runs) == expected_leaf_count
+    assert len(training.selected_model_runs) == len(forecast_leaves)
+    assert set(derived_leaf_outputs).issubset(forecast.distributions)
     assert forecast.targets.tz is not None
     assert forecast.paths[risk_node].shape == (N_FORECAST_PATHS, FORECAST_HORIZON)
-    assert (coherence["erro_máximo"] == 0.0).all()
-    assert repository.get_composition_alias("hierarchy-champion") == training.composition_run_id
+    assert (coherence["erro_máximo"] <= 1e-12).all()
+    assert repository.get_composition_alias(
+        "derived-hierarchy-champion"
+    ) == training.composition_run_id
+    assert all("function" not in str(node.to_payload()) for node in derived_leaf_outputs.values())
     print("Testes rápidos do Notebook 16 passaram.")
     """),
     md(r"""
     ## Conclusão
 
-    Um único dicionário de séries percorreu validação, caracterização, seleção, dependência,
-    forecast probabilístico, agregação hierárquica e risco. A estrutura do dicionário virou um
-    grafo de trajetórias coerentes sem exigir que a aplicação exponha uma fórmula específica.
+    O ciclo agora começa nas séries primitivas, passa por distribuições conjuntas e funções $g$ e
+    somente então forma folhas, grupos e total. Esse é o caso em que multiplicações e somas devem
+    acontecer sobre caminhos compartilhados: a hierarquia agrega **expressões probabilísticas**,
+    não forecasts univariados independentes das folhas de negócio.
     """),
 ]
 
 
 if __name__ == "__main__":
     write_notebook(PATH, CELLS, 16)
-

@@ -711,7 +711,7 @@ CELLS = [
     ```
 
     Como as somas são aplicadas caminho a caminho, a coerência é automática. O Notebook 16 recebe
-    `dict[str, list[pd.Series]]` e operacionaliza essa extensão.
+    `dict[str, dict[str, ForecastVariable]]`: cada valor interno já é uma expressão derivada.
     """),
     md(r"""
     ## 19. Limitações e armadilhas
@@ -765,8 +765,8 @@ CELLS = [
     aplicação vetorizada de $g$ e resumo empírico. A hierarquia do Notebook 16 reutiliza exatamente
     essa mecânica em várias folhas.
 
-    **Próximo passo:** o [Notebook 16](16_ciclo_hierarquico_dict.ipynb) recebe um
-    `dict[str, list[pd.Series]]` e constrói automaticamente folhas, grupos e total.
+    **Próximo passo:** o [Notebook 16](16_ciclo_hierarquico_dict.ipynb) recebe expressões
+    $Y_j=g_j(X_{j1},\ldots,X_{jp})$ organizadas por grupo e constrói automaticamente grupos e total.
     """),
 ]
 
